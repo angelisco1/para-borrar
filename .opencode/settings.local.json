@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "context7",
+    "slack"
+  ],
+  "skillOverrides": {
+    "anthropic-skills:docs": "off"
+  },
+  "outputStyle": "default"
+}
