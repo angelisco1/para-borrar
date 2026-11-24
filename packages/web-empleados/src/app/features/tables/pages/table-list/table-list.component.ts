@@ -1,5 +1,7 @@
 import { Component, computed, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { AuthStore } from '@resttek/web-shared';
+import { Order } from '../../../orders/models/order.model';
+import { OrderStore } from '../../../orders/store/order.store';
 import { Table, TableStatus } from '../../models/table.model';
 import { TableStore } from '../../store/table.store';
 
@@ -12,6 +14,7 @@ import { TableStore } from '../../store/table.store';
 export class TableListComponent implements OnInit, OnDestroy {
   private readonly authStore = inject(AuthStore);
   readonly tableStore = inject(TableStore);
+  readonly orderStore = inject(OrderStore);
 
   private restaurantId: string | null = null;
 
@@ -29,11 +32,17 @@ export class TableListComponent implements OnInit, OnDestroy {
     this.restaurantId = this.authStore.user()?.restaurantId ?? null;
     if (this.restaurantId) {
       this.tableStore.startPolling(this.restaurantId);
+      this.orderStore.startPolling(this.restaurantId);
     }
   }
 
   ngOnDestroy(): void {
     this.tableStore.stopPolling();
+    this.orderStore.stopPolling();
+  }
+
+  ordersForTable(tableId: string): Order[] {
+    return this.orderStore.orders().filter(order => order.tableId === tableId);
   }
 
   changeStatus(table: Table, status: TableStatus): void {

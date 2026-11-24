@@ -79,6 +79,66 @@
   font-size: 12px;
 }
 
+.table-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.no-orders {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.table-order {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-id {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.order-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item-quantity {
+  font-weight: 600;
+  color: var(--green-light);
+  font-size: 12px;
+}
+
+.item-name {
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.item-notes {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .table-actions {
   display: flex;
   gap: 8px;
