@@ -1,0 +1,528 @@
+openapi: 3.1.0
+
+info:
+  title: API de platos — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI de la carta pública y de la gestión de platos y sus recetas por restaurante.
+
+    ## Autenticación
+
+    `GET /public/restaurants/{restaurantId}/dishes` es público (`security: []`) y solo devuelve
+    platos disponibles. Los demás endpoints requieren `Authorization: Bearer <token>`. Crear,
+    actualizar y borrar admite `admin` y `manager`; consultar admite `admin`, `manager`,
+    `camarero` y `cocinero`. No se comprueba que el restaurante del token coincida con la ruta.
+
+    ## Formato de errores
+
+    Los errores de dominio devuelven `{ "error": "<NombreDelError>", "message": "<descripción>" }`
+    con 400, salvo `DishNotFoundError`, que devuelve 404. Los middlewares de acceso devuelven
+    `{ "error": "<descripción>" }` sin `message`: 401 por token ausente, malformado o inválido
+    y 403 por permisos insuficientes. Los errores no controlados devuelven
+    `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - Las categorías válidas son `entrante`, `principal`, `postre` y `bebida`; se normalizan con
+      `trim().toLowerCase()`. El nombre se valida contra vacío pero se guarda sin recortar, y la
+      descripción se guarda sin validar ni normalizar.
+    - `price` debe ser mayor que 0, pero no se valida explícitamente que sea un número finito.
+      En la creación `available` vale `true` e `ingredients` vale `[]` si se omiten. En el PUT se
+      espera el recurso completo: omitir `available` puede provocar un 500 por la restricción
+      `NOT NULL`, mientras que omitir `ingredients` vacía la receta.
+    - Cada ingrediente de la receta contiene `ingredientId` y `quantity`. Un ID vacío o una
+      cantidad menor o igual que 0 lanza un `Error` genérico, no un `AppError`, y por tanto
+      devuelve **500**, no 400.
+    - No se comprueba en la lógica de negocio que el restaurante o los ingredientes existan, ni
+      que los ingredientes pertenezcan al mismo restaurante. SQLite valida las claves foráneas;
+      los fallos terminan en 500. IDs de ingredientes duplicados también rompen la clave primaria
+      de `dish_ingredients` y dan 500.
+    - **El parámetro `restaurantId` se ignora en detalle, actualización y borrado.** Estas
+      operaciones buscan únicamente por `id`, por lo que un plato de otro restaurante puede ser
+      leído, modificado o borrado si se conoce su ID. En el PUT se conserva el restaurante
+      original y se sustituye toda la receta.
+    - Borrar un plato referenciado por líneas de pedidos existentes falla por clave foránea y
+      devuelve 500; no se realiza un borrado lógico.
+    - La carta pública filtra por `available`, pero devuelve el mismo objeto completo que el
+      listado privado, incluidos `ingredientId` y `quantity` de la receta. Un restaurante
+      inexistente produce `[]` en los listados. No hay paginación ni orden explícito.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Platos (público)
+    description: Carta disponible de un restaurante sin autenticación.
+  - name: Platos
+    description: Consulta y gestión autenticada de platos y recetas.
+
+paths:
+  /public/restaurants/{restaurantId}/dishes:
+    get:
+      operationId: listPublicDishes
+      tags: [Platos (público)]
+      summary: Listar la carta disponible
+      description: 'Devuelve solo los platos con `available: true`, sin autenticación y con la receta completa.'
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Platos disponibles del restaurante.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Dish' }
+              examples:
+                cartaRest1:
+                  value:
+                    - id: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                      name: Pizza Margarita
+                      description: Pizza clásica con tomate, mozzarella y albahaca
+                      price: 12.5
+                      category: principal
+                      available: true
+                      restaurantId: rest-1
+                      ingredients:
+                        - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                          quantity: 0.3
+                        - ingredientId: 2d655c3d-b4b2-4af9-b1e6-e5acdaea4d21
+                          quantity: 0.4
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/dishes:
+    post:
+      operationId: createDish
+      tags: [Platos]
+      summary: Crear un plato
+      description: 'Crea un plato y su receta en el restaurante de la ruta. Roles permitidos: `admin` y `manager`.'
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDishInput' }
+            examples:
+              pizza:
+                value:
+                  name: Pizza Margarita
+                  description: Pizza clásica con tomate, mozzarella y albahaca
+                  price: 12.5
+                  category: PRINCIPAL
+                  ingredients:
+                    - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                      quantity: 0.3
+                    - ingredientId: 2d655c3d-b4b2-4af9-b1e6-e5acdaea4d21
+                      quantity: 0.4
+      responses:
+        '201':
+          description: Plato creado con su categoría normalizada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dish' }
+              examples:
+                creado:
+                  value:
+                    id: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                    name: Pizza Margarita
+                    description: Pizza clásica con tomate, mozzarella y albahaca
+                    price: 12.5
+                    category: principal
+                    available: true
+                    restaurantId: rest-1
+                    ingredients:
+                      - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                        quantity: 0.3
+                      - ingredientId: 2d655c3d-b4b2-4af9-b1e6-e5acdaea4d21
+                        quantity: 0.4
+                    createdAt: '2026-11-24T12:00:00.000Z'
+                    updatedAt: '2026-11-24T12:00:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listDishes
+      tags: [Platos]
+      summary: Listar todos los platos
+      description: |
+        Devuelve platos disponibles y no disponibles. Roles permitidos: `admin`, `manager`,
+        `camarero` y `cocinero`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Platos del restaurante, sin paginación.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Dish' }
+              examples:
+                platosRest2:
+                  value:
+                    - id: e5459c44-ca24-442b-8121-600d51e69a10
+                      name: Pizza Napolitana
+                      description: Pizza al estilo napolitano con tomate y mozzarella
+                      price: 14
+                      category: principal
+                      available: true
+                      restaurantId: rest-2
+                      ingredients:
+                        - ingredientId: 4e74362e-e4ce-4554-b812-cb7f39bc48a0
+                          quantity: 0.5
+                        - ingredientId: cfc9de91-45bc-4323-bf01-a33ab0c5b601
+                          quantity: 0.02
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/dishes/{id}:
+    get:
+      operationId: getDish
+      tags: [Platos]
+      summary: Obtener un plato
+      description: |
+        Busca solo por `id`, sin comprobar que pertenece al restaurante de la ruta. Roles
+        permitidos: `admin`, `manager`, `camarero` y `cocinero`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/DishId'
+      responses:
+        '200':
+          description: Plato encontrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dish' }
+              examples:
+                pizza:
+                  value:
+                    id: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                    name: Pizza Margarita
+                    description: Pizza clásica con tomate, mozzarella y albahaca
+                    price: 12.5
+                    category: principal
+                    available: true
+                    restaurantId: rest-1
+                    ingredients:
+                      - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                        quantity: 0.3
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-20T10:00:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: updateDish
+      tags: [Platos]
+      summary: Reemplazar un plato y su receta
+      description: |
+        Actualiza todos los campos editables y sustituye la receta completa. Roles permitidos:
+        `admin` y `manager`. El restaurante original se conserva y el de la ruta se ignora.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/DishId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDishInput' }
+            examples:
+              actualizacion:
+                value:
+                  name: Pizza Margarita
+                  description: Receta actualizada
+                  price: 13
+                  category: principal
+                  available: false
+                  ingredients:
+                    - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                      quantity: 0.35
+      responses:
+        '200':
+          description: Plato y receta actualizados.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dish' }
+              examples:
+                actualizado:
+                  value:
+                    id: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                    name: Pizza Margarita
+                    description: Receta actualizada
+                    price: 13
+                    category: principal
+                    available: false
+                    restaurantId: rest-1
+                    ingredients:
+                      - ingredientId: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                        quantity: 0.35
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T12:30:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: deleteDish
+      tags: [Platos]
+      summary: Borrar un plato
+      description: |
+        Borra por `id`, sin contrastar el restaurante. Roles permitidos: `admin` y `manager`.
+        Si existen pedidos que referencian el plato, la clave foránea impide el borrado y da 500.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/DishId'
+      responses:
+        '204':
+          description: Plato borrado, sin cuerpo.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtenido en `POST /api/v1/auth/login`.
+
+  parameters:
+    RestaurantId:
+      name: restaurantId
+      in: path
+      required: true
+      description: Restaurante de la ruta. Las operaciones privadas por `id` no lo contrastan con el plato.
+      schema: { type: string }
+      example: rest-1
+    DishId:
+      name: id
+      in: path
+      required: true
+      description: Identificador UUID del plato.
+      schema: { type: string, format: uuid }
+      example: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+
+  responses:
+    ValidationError:
+      description: Nombre vacío, precio no positivo, restaurante vacío o categoría fuera del enum.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            nombreObligatorio:
+              value: { error: DishNameRequiredError, message: Dish name is required }
+            precioInvalido:
+              value: { error: InvalidPriceError, message: Price must be a positive number }
+            categoriaInvalida:
+              value: { error: InvalidCategoryError, message: 'Invalid category: fuera-de-carta. Must be one of: entrante, principal, postre, bebida' }
+            restauranteObligatorio:
+              value: { error: RestaurantIdRequiredError, message: Restaurant ID is required }
+    Unauthorized:
+      description: Token ausente, malformado o inválido; el cuerpo solo contiene `error`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinToken: { value: { error: 'Unauthorized: No token provided' } }
+            tokenMalformado: { value: { error: 'Unauthorized: Malformed token' } }
+            tokenInvalido: { value: { error: 'Unauthorized: Invalid token' } }
+    Forbidden:
+      description: El rol autenticado no está entre los permitidos para la operación.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinPermisos: { value: { error: 'Forbidden: Insufficient permissions' } }
+    NotFound:
+      description: No existe ningún plato con ese `id`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            noEncontrado:
+              value: { error: DishNotFoundError, message: Dish not found }
+    InternalServerError:
+      description: |
+        Error no controlado. Incluye recetas con ID vacío o cantidad no positiva, fallos de
+        claves foráneas y valores ausentes que SQLite no admite.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+          examples:
+            errorInterno:
+              value: { error: InternalServerError, message: Something went wrong }
+
+  schemas:
+    DishCategory:
+      type: string
+      enum: [entrante, principal, postre, bebida]
+      example: principal
+
+    DishIngredient:
+      type: object
+      required: [ingredientId, quantity]
+      properties:
+        ingredientId:
+          type: string
+          minLength: 1
+          description: Debe corresponder a un ingrediente existente para evitar un 500 de SQLite.
+          example: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          description: Cantidad por plato; un valor no positivo produce 500 en el código actual.
+          example: 0.3
+
+    Dish:
+      type: object
+      required: [id, name, description, price, category, available, restaurantId, ingredients, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+        name:
+          type: string
+          example: Pizza Margarita
+        description:
+          type: [string, 'null']
+          example: Pizza clásica con tomate, mozzarella y albahaca
+        price:
+          type: number
+          example: 12.5
+        category:
+          $ref: '#/components/schemas/DishCategory'
+        available:
+          type: boolean
+          example: true
+        restaurantId:
+          type: string
+          example: rest-1
+        ingredients:
+          type: array
+          items: { $ref: '#/components/schemas/DishIngredient' }
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+
+    CreateDishInput:
+      type: object
+      required: [name, price, category]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Pizza Margarita
+        description:
+          type: [string, 'null']
+          example: Pizza clásica con tomate, mozzarella y albahaca
+        price:
+          type: number
+          exclusiveMinimum: 0
+          example: 12.5
+        category:
+          type: string
+          description: Se normaliza a entrante, principal, postre o bebida antes de validar.
+          example: PRINCIPAL
+        available:
+          type: boolean
+          default: true
+          example: true
+        ingredients:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/DishIngredient' }
+
+    UpdateDishInput:
+      type: object
+      required: [name, price, category, available]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Pizza Margarita
+        description:
+          type: [string, 'null']
+          example: Receta actualizada
+        price:
+          type: number
+          exclusiveMinimum: 0
+          example: 13
+        category:
+          type: string
+          description: Se normaliza a entrante, principal, postre o bebida antes de validar.
+          example: principal
+        available:
+          type: boolean
+          example: false
+        ingredients:
+          type: array
+          default: []
+          description: Sustituye la receta; si se omite, queda vacía.
+          items: { $ref: '#/components/schemas/DishIngredient' }
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: DishNotFoundError }
+        message: { type: string, example: Dish not found }
+    AuthErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: 'Unauthorized: Invalid token' }
+    InternalErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, const: InternalServerError }
+        message: { type: string, const: Something went wrong }

@@ -1,0 +1,304 @@
+openapi: 3.1.0
+
+info:
+  title: API de autenticación — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI del inicio de sesión y del registro público de clientes de Resttek.
+
+    ## Autenticación
+
+    Los dos endpoints de este recurso son públicos (`security: []`). El inicio de sesión y el
+    registro devuelven un token JWT que debe enviarse como `Authorization: Bearer <token>` en
+    los endpoints privados del resto de la API. El token contiene `id`, `role` y
+    `restaurantId`, y caduca a las 8 horas. Las credenciales de prueba creadas por el seed usan
+    como contraseña el propio email (por ejemplo, `admin@resttek.com`).
+
+    ## Formato de errores
+
+    Los errores de dominio pasan por el `errorHandler` y tienen el formato
+    `{ "error": "<NombreDelError>", "message": "<descripción>" }`. Las credenciales
+    incorrectas devuelven 401 `InvalidCredentialsError`; las validaciones de registro y los
+    emails duplicados devuelven 400. Los errores no controlados devuelven
+    `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+    Estos endpoints no pasan por los middlewares `authenticate`/`authorize`.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - El email se valida con una expresión regular básica, pero no se normaliza: no se recorta
+      ni se convierte a minúsculas. La búsqueda de duplicados y de usuarios es exacta.
+    - Los nombres y apellidos se comprueban para rechazar cadenas vacías, pero se almacenan con
+      los espacios originales.
+    - No existe una política de longitud o complejidad de contraseñas ni una comprobación
+      explícita de que `password` esté presente antes de cifrarla. Valores ausentes o de tipos
+      incompatibles pueden terminar en un error 500 al usar `bcrypt`.
+    - `POST /auth/register` crea siempre un empleado con rol `cliente` y `restaurantId: null`;
+      no permite elegir otro rol ni asociarlo a un restaurante.
+    - No hay limitación de intentos de inicio de sesión, refresco de token ni cierre de sesión.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Autenticación
+    description: Acceso de usuarios existentes y registro público de clientes.
+
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      tags:
+        - Autenticación
+      summary: Iniciar sesión
+      description: |
+        Comprueba el email y la contraseña y devuelve un JWT junto con los datos públicos del
+        usuario. Endpoint público: no requiere cabecera `Authorization`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+            examples:
+              administrador:
+                summary: Administrador creado por el seed
+                value:
+                  email: admin@resttek.com
+                  password: admin@resttek.com
+              camarero:
+                summary: Camarero de rest-1
+                value:
+                  email: camarero1@resttek.com
+                  password: camarero1@resttek.com
+      responses:
+        '200':
+          description: Credenciales válidas; devuelve el token y el usuario autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              examples:
+                acceso:
+                  summary: Inicio de sesión del administrador
+                  value:
+                    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ejemplo.firma
+                    employee:
+                      id: 8f1d5ad6-70b9-4d44-9b15-76d38be67f10
+                      firstName: Admin
+                      lastName: RestTek
+                      email: admin@resttek.com
+                      role: admin
+                      restaurantId: null
+        '401':
+          description: El email no existe o la contraseña no coincide.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                credencialesInvalidas:
+                  value:
+                    error: InvalidCredentialsError
+                    message: Invalid credentials
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/register:
+    post:
+      operationId: registerClient
+      tags:
+        - Autenticación
+      summary: Registrar un cliente
+      description: |
+        Crea un usuario con rol `cliente`, sin restaurante asociado, y devuelve directamente un
+        JWT y los datos del usuario. Endpoint público.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterClientInput'
+            examples:
+              clienteNuevo:
+                summary: Registro de una clienta
+                value:
+                  firstName: Lucía
+                  lastName: Navarro
+                  email: lucia.navarro@example.com
+                  password: una-clave-segura
+      responses:
+        '201':
+          description: Cliente registrado y autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              examples:
+                registrado:
+                  value:
+                    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ejemplo-cliente.firma
+                    employee:
+                      id: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+                      firstName: Lucía
+                      lastName: Navarro
+                      email: lucia.navarro@example.com
+                      role: cliente
+                      restaurantId: null
+        '400':
+          description: Datos obligatorios ausentes, email inválido o email ya registrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                nombreObligatorio:
+                  value:
+                    error: FirstNameRequiredError
+                    message: First name is required
+                apellidosObligatorios:
+                  value:
+                    error: LastNameRequiredError
+                    message: Last name is required
+                emailInvalido:
+                  value:
+                    error: InvalidEmailError
+                    message: Invalid email format
+                emailDuplicado:
+                  value:
+                    error: DuplicatedEmailError
+                    message: Email is already in use
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  schemas:
+    LoginInput:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email exacto con el que se registró el usuario; no se normaliza.
+          example: admin@resttek.com
+        password:
+          type: string
+          format: password
+          description: Contraseña en texto plano.
+          example: admin@resttek.com
+
+    RegisterClientInput:
+      type: object
+      required:
+        - firstName
+        - lastName
+        - email
+        - password
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          description: Nombre; no puede estar vacío o contener solo espacios.
+          example: Lucía
+        lastName:
+          type: string
+          minLength: 1
+          description: Apellidos; no pueden estar vacíos o contener solo espacios.
+          example: Navarro
+        email:
+          type: string
+          format: email
+          description: Email válido y no registrado previamente; se conserva sin normalizar.
+          example: lucia.navarro@example.com
+        password:
+          type: string
+          format: password
+          description: Contraseña en texto plano; el código no aplica una política de complejidad.
+          example: una-clave-segura
+
+    Employee:
+      type: object
+      description: Datos públicos del usuario; nunca incluye el hash de la contraseña.
+      required:
+        - id
+        - firstName
+        - lastName
+        - email
+        - role
+        - restaurantId
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 8f1d5ad6-70b9-4d44-9b15-76d38be67f10
+        firstName:
+          type: string
+          example: Admin
+        lastName:
+          type: string
+          example: RestTek
+        email:
+          type: string
+          format: email
+          example: admin@resttek.com
+        role:
+          type: string
+          enum: [admin, manager, camarero, cocinero, cliente]
+          example: admin
+        restaurantId:
+          type: [string, 'null']
+          description: Restaurante asociado, o `null` para administradores y clientes.
+          example: null
+
+    AuthResponse:
+      type: object
+      required:
+        - token
+        - employee
+      properties:
+        token:
+          type: string
+          description: JWT firmado con caducidad de 8 horas.
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ejemplo.firma
+        employee:
+          $ref: '#/components/schemas/Employee'
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: InvalidCredentialsError
+        message:
+          type: string
+          example: Invalid credentials
+
+    InternalErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          const: InternalServerError
+        message:
+          type: string
+          const: Something went wrong
+
+  responses:
+    InternalServerError:
+      description: Error no controlado, incluidos fallos de `bcrypt` por valores incompatibles.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InternalErrorResponse'
+          examples:
+            errorInterno:
+              value:
+                error: InternalServerError
+                message: Something went wrong

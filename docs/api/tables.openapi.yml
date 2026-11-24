@@ -2,13 +2,13 @@ openapi: 3.1.0
 
 info:
   title: API de mesas — Resttek
-  version: 1.0.0
+  version: 1.0.1
   description: |
     Contrato OpenAPI de la gestión de **mesas** de Resttek (issue #5, «Gestión de mesas»).
 
-    > **Estado: contrato previo a la implementación.** Los endpoints todavía no existen en
-    > `packages/api`; este documento es la fuente de verdad para que los equipos de los tres
-    > frontends (`web-admin`, `web-empleados`, `web-clientes`) revisen y construyan sobre él.
+    > **Estado: contrato implementado.** Este documento describe el comportamiento real de los
+    > endpoints de mesas de `packages/api` y sirve de referencia para los tres frontends
+    > (`web-admin`, `web-empleados`, `web-clientes`).
 
     Las mesas son una entidad de primer nivel perteneciente a un restaurante: el administrador
     las gestiona (crear, editar, borrar), el personal del restaurante consulta su estado y lo
@@ -42,14 +42,14 @@ info:
       `403 Forbidden: Insufficient permissions`.
     - **Errores no controlados**: `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
 
-    Errores de dominio previstos para las mesas: `TableNotFoundError` (404),
+    Errores de dominio implementados para las mesas: `TableNotFoundError` (404),
     `InvalidTableNumberError`, `InvalidTableCapacityError`, `InvalidTableStatusError`,
     `DuplicatedTableNumberError`, `TableNotAvailableError` y `TableCapacityExceededError`
-    (todos 400). Además, para un `partySize` ausente o inválido se prevé `InvalidPartySizeError`
+    (todos 400). Además, para un `partySize` ausente o inválido se devuelve `InvalidPartySizeError`
     (400), para una fecha de reserva inválida `InvalidReservationDataError` (400) y para un
     `minCapacity` inválido se reutiliza `InvalidTableCapacityError` (400).
 
-    ## Consideraciones generales (comportamiento previsto del código)
+    ## Consideraciones generales (comportamiento real del código)
 
     - **Ocupación al pulsar «Continuar»**: el cliente elige una mesa libre según el número de
       comensales y, al confirmar, la UI llama a
@@ -86,9 +86,14 @@ info:
       coincide con `Table.id`.
     - **Normalización**: igual que `normalizeOrderStatus`, los valores de `status` se
       normalizan (minúsculas y sin espacios) antes de validarlos.
-    - **Restaurante inexistente**: igual que en el resto de recursos anidados bajo
-      `/restaurants/{restaurantId}`, no hay ningún error de dominio previsto para un
-      `restaurantId` que no existe, por lo que no se garantiza un 404 en ese caso.
+    - **Restaurante inexistente**: los listados no comprueban que `restaurantId` exista y
+      devuelven `[]`; la creación con un restaurante inexistente falla en la clave foránea de
+      SQLite y termina en 500. En las operaciones por `tableId` (detalle, PUT, DELETE, ocupar y
+      cambiar estado), el `restaurantId` de la ruta se ignora: se busca solo por `tableId`, se
+      conserva el restaurante original y no se garantiza que coincida con el de la ruta.
+    - **Datos de reserva**: `reservedFor` es texto libre que no se recorta ni valida. Los campos
+      `status` son obligatorios en PUT y PATCH; valores ausentes o de tipos incompatibles pueden
+      provocar un error de JavaScript y una respuesta 500 en lugar de un error de dominio 400.
 
 servers:
   - url: http://localhost:3000/api/v1
@@ -326,7 +331,7 @@ paths:
         '400':
           description: |
             Validación de dominio fallida: número o capacidad inválidos, estado fuera del
-            enum o número duplicado en el restaurante.
+            enum, número duplicado en el restaurante o fecha de reserva inválida.
           content:
             application/json:
               schema:
@@ -470,7 +475,7 @@ paths:
         '400':
           description: |
             Validación de dominio fallida: número o capacidad inválidos, estado fuera del
-            enum o número duplicado en el restaurante.
+            enum, número duplicado en el restaurante o fecha de reserva inválida.
           content:
             application/json:
               schema:
@@ -734,11 +739,10 @@ components:
       name: tableId
       in: path
       required: true
-      description: Identificador (uuid) de la mesa. Coincide con el `tableId` que traen los pedidos.
+      description: Identificador de la mesa. Las mesas nuevas usan UUID; el seed usa valores como `table-rest-1-5`. Coincide con el `tableId` que traen los pedidos.
       schema:
         type: string
-        format: uuid
-      example: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+      example: table-rest-1-5
     MinCapacity:
       name: minCapacity
       in: query
@@ -801,7 +805,7 @@ components:
               value:
                 error: 'Forbidden: Insufficient permissions'
     NotFound:
-      description: No existe ninguna mesa con ese `tableId` en el restaurante indicado.
+      description: No existe ninguna mesa con ese `tableId`; el `restaurantId` de la ruta no interviene en la búsqueda.
       content:
         application/json:
           schema:
@@ -857,8 +861,7 @@ components:
       properties:
         id:
           type: string
-          format: uuid
-          description: Identificador único de la mesa.
+          description: Identificador único de la mesa; UUID en registros nuevos, o identificadores del seed como `table-rest-1-5`.
         restaurantId:
           type: string
           description: Identificador del restaurante al que pertenece la mesa.

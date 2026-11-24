@@ -1,0 +1,442 @@
+openapi: 3.1.0
+
+info:
+  title: API de restaurantes — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI de consulta pública, consulta autenticada y administración de restaurantes.
+
+    ## Autenticación
+
+    Las rutas bajo `/public/restaurants` son públicas (`security: []`). Las rutas bajo
+    `/restaurants` requieren `Authorization: Bearer <token>`. Crear y actualizar exige rol
+    `admin`; los listados y detalles privados admiten cualquier token válido. En el listado
+    privado, un `admin` ve todos los restaurantes y el resto de roles solo ve el restaurante
+    indicado por el claim `restaurantId` de su token.
+
+    ## Formato de errores
+
+    Los errores de dominio devuelven `{ "error": "<NombreDelError>", "message": "<descripción>" }`
+    con 400, excepto `RestaurantNotFoundError`, que devuelve 404. Los middlewares de acceso
+    devuelven `{ "error": "<descripción>" }` sin `message`: 401 por token ausente, malformado o
+    inválido y 403 por permisos insuficientes. Los errores no controlados devuelven
+    `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - Las respuestas públicas incluyen todos los datos del restaurante, incluidos email,
+      teléfono y nombre y apellidos del propietario; no existe un DTO público reducido.
+    - No hay endpoint de borrado. Crear y actualizar generan o conservan internamente el
+      identificador y las fechas; el cliente no puede elegirlos en el cuerpo.
+    - Nombre, dirección y datos del propietario se validan contra valores vacíos pero se
+      almacenan sin recortar. El email se valida con una expresión regular básica y se conserva
+      sin normalizar. `logoUrl` no se valida como URL y puede ser `null`.
+    - El teléfono debe cumplir `^\+?[\d\s\-()]{7,20}$`; se almacena exactamente como se recibe.
+    - No hay unicidad de nombre o email de restaurante ni comprobación de propiedad sobre el
+      restaurante en la lógica de autorización: la restricción se basa únicamente en el rol.
+    - En el listado privado de un usuario sin `restaurantId` que no sea `admin`, la respuesta es
+      `[]`. Si su token apunta a un restaurante inexistente, la respuesta es 404.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Restaurantes (público)
+    description: Consulta sin autenticación de todos los datos de los restaurantes.
+  - name: Restaurantes
+    description: Consulta autenticada y administración por el rol `admin`.
+
+paths:
+  /public/restaurants:
+    get:
+      operationId: listPublicRestaurants
+      tags: [Restaurantes (público)]
+      summary: Listar restaurantes públicamente
+      description: Devuelve todos los restaurantes, sin filtros ni paginación y sin autenticación.
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/RestaurantList'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /public/restaurants/{id}:
+    get:
+      operationId: getPublicRestaurant
+      tags: [Restaurantes (público)]
+      summary: Obtener un restaurante públicamente
+      description: Devuelve todos los datos de un restaurante sin requerir autenticación.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          $ref: '#/components/responses/RestaurantDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants:
+    post:
+      operationId: createRestaurant
+      tags: [Restaurantes]
+      summary: Crear un restaurante
+      description: Crea un restaurante con un UUID generado por la API. Requiere rol `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestaurantInput'
+            examples:
+              nuevoRestaurante:
+                value:
+                  name: Casa Carmen
+                  address: Plaza Nueva 8, Sevilla
+                  email: hola@casacarmen.com
+                  phone: '+34 954 123 456'
+                  ownerFirstName: Carmen
+                  ownerLastName: Jiménez
+                  logoUrl: https://cdn.resttek.com/logos/casa-carmen.png
+      responses:
+        '201':
+          description: Restaurante creado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Restaurant' }
+              examples:
+                creado:
+                  value:
+                    id: e3186ad1-6651-482a-8b6f-f67394dd1c02
+                    name: Casa Carmen
+                    address: Plaza Nueva 8, Sevilla
+                    email: hola@casacarmen.com
+                    phone: '+34 954 123 456'
+                    ownerFirstName: Carmen
+                    ownerLastName: Jiménez
+                    logoUrl: https://cdn.resttek.com/logos/casa-carmen.png
+                    createdAt: '2026-11-24T12:00:00.000Z'
+                    updatedAt: '2026-11-24T12:00:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listRestaurants
+      tags: [Restaurantes]
+      summary: Listar restaurantes según el usuario
+      description: |
+        Requiere cualquier token válido. Un `admin` recibe todos los restaurantes; los demás
+        roles reciben como máximo el restaurante de su claim `restaurantId`, o `[]` si no tienen
+        ese claim.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/RestaurantList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: El token de un usuario no administrador apunta a un restaurante inexistente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                noEncontrado:
+                  value: { error: RestaurantNotFoundError, message: Restaurant not found }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{id}:
+    get:
+      operationId: getRestaurant
+      tags: [Restaurantes]
+      summary: Obtener un restaurante
+      description: |
+        Devuelve un restaurante por identificador con cualquier token válido. No se comprueba
+        que el usuario autenticado pertenezca a ese restaurante.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          $ref: '#/components/responses/RestaurantDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: updateRestaurant
+      tags: [Restaurantes]
+      summary: Reemplazar los datos de un restaurante
+      description: |
+        Sustituye todos los campos editables. Requiere rol `admin`. `logoUrl` es opcional y se
+        guarda como `null` si se omite; los demás campos se envían completos en un PUT.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestaurantInput'
+            examples:
+              actualizacion:
+                value:
+                  name: Restaurante El Gourmet
+                  address: Calle Mayor 12, Madrid
+                  email: reservas@gourmet.com
+                  phone: '912345678'
+                  ownerFirstName: Carlos
+                  ownerLastName: García
+                  logoUrl: null
+      responses:
+        '200':
+          description: Restaurante actualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Restaurant' }
+              examples:
+                actualizado:
+                  value:
+                    id: rest-1
+                    name: Restaurante El Gourmet
+                    address: Calle Mayor 12, Madrid
+                    email: reservas@gourmet.com
+                    phone: '912345678'
+                    ownerFirstName: Carlos
+                    ownerLastName: García
+                    logoUrl: null
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T12:30:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtenido en `POST /api/v1/auth/login`.
+
+  parameters:
+    RestaurantId:
+      name: id
+      in: path
+      required: true
+      description: Identificador del restaurante. El seed usa cadenas como `rest-1`; los nuevos registros usan UUID.
+      schema: { type: string }
+      example: rest-1
+
+  responses:
+    RestaurantList:
+      description: Lista de restaurantes, sin paginación.
+      content:
+        application/json:
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/Restaurant' }
+          examples:
+            restaurantesDelSeed:
+              value:
+                - id: rest-1
+                  name: Restaurante El Gourmet
+                  address: Calle Mayor 10, Madrid
+                  email: info@gourmet.com
+                  phone: '912345678'
+                  ownerFirstName: Carlos
+                  ownerLastName: García
+                  logoUrl: null
+                  createdAt: '2026-11-20T10:00:00.000Z'
+                  updatedAt: '2026-11-20T10:00:00.000Z'
+                - id: rest-2
+                  name: Pizzería Napoli
+                  address: Avenida del Sol 25, Barcelona
+                  email: info@napoli.com
+                  phone: '934567890'
+                  ownerFirstName: Marco
+                  ownerLastName: Rossi
+                  logoUrl: null
+                  createdAt: '2026-11-20T10:00:00.000Z'
+                  updatedAt: '2026-11-20T10:00:00.000Z'
+    RestaurantDetail:
+      description: Restaurante encontrado.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Restaurant' }
+          examples:
+            elGourmet:
+              value:
+                id: rest-1
+                name: Restaurante El Gourmet
+                address: Calle Mayor 10, Madrid
+                email: info@gourmet.com
+                phone: '912345678'
+                ownerFirstName: Carlos
+                ownerLastName: García
+                logoUrl: null
+                createdAt: '2026-11-20T10:00:00.000Z'
+                updatedAt: '2026-11-20T10:00:00.000Z'
+    ValidationError:
+      description: Campo obligatorio vacío, email inválido o teléfono con formato incorrecto.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            nombreObligatorio:
+              value: { error: RestaurantNameRequiredError, message: Restaurant name is required }
+            direccionObligatoria:
+              value: { error: RestaurantAddressRequiredError, message: Restaurant address is required }
+            emailInvalido:
+              value: { error: InvalidEmailError, message: Invalid email format }
+            telefonoInvalido:
+              value: { error: InvalidPhoneError, message: Invalid phone format }
+            propietarioSinNombre:
+              value: { error: OwnerFirstNameRequiredError, message: Owner first name is required }
+            propietarioSinApellidos:
+              value: { error: OwnerLastNameRequiredError, message: Owner last name is required }
+    Unauthorized:
+      description: Token ausente, malformado o inválido; el cuerpo solo contiene `error`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinToken: { value: { error: 'Unauthorized: No token provided' } }
+            tokenMalformado: { value: { error: 'Unauthorized: Malformed token' } }
+            tokenInvalido: { value: { error: 'Unauthorized: Invalid token' } }
+    Forbidden:
+      description: El usuario autenticado no tiene rol `admin`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinPermisos: { value: { error: 'Forbidden: Insufficient permissions' } }
+    NotFound:
+      description: No existe un restaurante con ese identificador.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            noEncontrado:
+              value: { error: RestaurantNotFoundError, message: Restaurant not found }
+    InternalServerError:
+      description: Error no controlado por la API.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+          examples:
+            errorInterno:
+              value: { error: InternalServerError, message: Something went wrong }
+
+  schemas:
+    Restaurant:
+      type: object
+      required: [id, name, address, email, phone, ownerFirstName, ownerLastName, logoUrl, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: rest-1
+        name:
+          type: string
+          example: Restaurante El Gourmet
+        address:
+          type: string
+          example: Calle Mayor 10, Madrid
+        email:
+          type: string
+          format: email
+          example: info@gourmet.com
+        phone:
+          type: string
+          example: '912345678'
+        ownerFirstName:
+          type: string
+          example: Carlos
+        ownerLastName:
+          type: string
+          example: García
+        logoUrl:
+          type: [string, 'null']
+          description: Texto almacenado sin validación de URL; puede ser `null`.
+          example: null
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+
+    RestaurantInput:
+      type: object
+      required: [name, address, email, phone, ownerFirstName, ownerLastName]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Casa Carmen
+        address:
+          type: string
+          minLength: 1
+          example: Plaza Nueva 8, Sevilla
+        email:
+          type: string
+          format: email
+          example: hola@casacarmen.com
+        phone:
+          type: string
+          pattern: '^\+?[\d\s\-()]{7,20}$'
+          example: '+34 954 123 456'
+        ownerFirstName:
+          type: string
+          minLength: 1
+          example: Carmen
+        ownerLastName:
+          type: string
+          minLength: 1
+          example: Jiménez
+        logoUrl:
+          type: [string, 'null']
+          description: Opcional; se guarda `null` si se omite y no se valida su formato.
+          example: https://cdn.resttek.com/logos/casa-carmen.png
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: RestaurantNotFoundError }
+        message: { type: string, example: Restaurant not found }
+    AuthErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: 'Unauthorized: Invalid token' }
+    InternalErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, const: InternalServerError }
+        message: { type: string, const: Something went wrong }
