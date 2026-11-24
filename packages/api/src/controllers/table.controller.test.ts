@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { TableController } from './table.controller.js'
 import type { TableService } from '@services/table.service.js'
 import type { Table } from '@models/table.model.js'
-import { TableNotFoundError, TableNotAvailableError } from '@errors/DomainErrors.js'
+import { TableNotFoundError, TableNotAvailableError, InvalidTableStatusError } from '@errors/DomainErrors.js'
 
 const baseTable: Table = {
     id: 't1',
@@ -31,9 +31,10 @@ describe('TableController (CRUD)', () => {
     let res: any
     let next: any
 
-    const reqFor = (params: Record<string, string> = {}, body: Record<string, unknown> = {}): any => ({
+    const reqFor = (params: Record<string, string> = {}, body: Record<string, unknown> = {}, query: Record<string, unknown> = {}): any => ({
         params: { restaurantId: 'rest-1', ...params },
-        body
+        body,
+        query
     })
 
     beforeEach(() => {
@@ -71,11 +72,29 @@ describe('TableController (CRUD)', () => {
     it('should respond 200 with all tables of the restaurant', async () => {
         await controller.getAll(reqFor(), res, next)
 
+        expect(service.listByRestaurant).toHaveBeenCalledWith('rest-1', undefined)
         expect(res.status).toHaveBeenCalledWith(200)
         expect(res.json).toHaveBeenCalledWith([
             expect.objectContaining({ id: 't1', restaurantId: 'rest-1' })
         ])
         expect(next).not.toHaveBeenCalled()
+    })
+
+    it('should pass the status filter to the service', async () => {
+        await controller.getAll(reqFor({}, {}, { status: 'libre' }), res, next)
+
+        expect(service.listByRestaurant).toHaveBeenCalledWith('rest-1', 'libre')
+        expect(res.status).toHaveBeenCalledWith(200)
+        expect(next).not.toHaveBeenCalled()
+    })
+
+    it('should delegate invalid status filters to next', async () => {
+        service.listByRestaurant.mockRejectedValueOnce(new InvalidTableStatusError())
+
+        await controller.getAll(reqFor({}, {}, { status: 'pausada' }), res, next)
+
+        expect(next).toHaveBeenCalledWith(expect.any(InvalidTableStatusError))
+        expect(res.status).not.toHaveBeenCalled()
     })
 
     it('should respond 200 with one table', async () => {

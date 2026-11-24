@@ -24,7 +24,8 @@ export class TableController {
 
     getAll = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const tables = await this.tableService.listByRestaurant(req.params.restaurantId as string)
+            const status = req.query.status as string | undefined
+            const tables = await this.tableService.listByRestaurant(req.params.restaurantId as string, status)
             res.status(200).json(tables.map(t => this.toJSON(t)))
         } catch (error) {
             next(error)

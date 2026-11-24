@@ -108,8 +108,13 @@ export class TableService {
         return table
     }
 
-    async listByRestaurant(restaurantId: string): Promise<Table[]> {
-        return this.tableRepository.findByRestaurantId(restaurantId)
+    async listByRestaurant(restaurantId: string, status?: string): Promise<Table[]> {
+        const tables = await this.tableRepository.findByRestaurantId(restaurantId)
+        if (status === undefined) {
+            return tables
+        }
+        const normalized = normalizeTableStatus(status)
+        return tables.filter(t => t.status === normalized)
     }
 
     async delete(id: string): Promise<void> {

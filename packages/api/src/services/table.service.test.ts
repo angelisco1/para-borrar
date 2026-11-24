@@ -143,6 +143,21 @@ describe('TableService', () => {
             const results = await service.listByRestaurant('rest-2')
             expect(results).toHaveLength(0)
         })
+
+        it('should filter by status when provided', async () => {
+            await service.create({ ...validDTO, number: 1 })
+            await service.create({ ...validDTO, number: 2, status: 'ocupada' })
+
+            const results = await service.listByRestaurant('rest-1', 'OCUPADA')
+
+            expect(results).toHaveLength(1)
+            expect(results[0]?.number).toBe(2)
+        })
+
+        it('should throw InvalidTableStatusError for an unknown status filter', async () => {
+            await expect(service.listByRestaurant('rest-1', 'pausada'))
+                .rejects.toThrow(InvalidTableStatusError)
+        })
     })
 
     describe('delete', () => {
