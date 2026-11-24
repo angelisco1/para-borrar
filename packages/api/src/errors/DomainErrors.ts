@@ -174,3 +174,21 @@ export class InvalidTableStatusError extends AppError {
   }
 }
 
+export class InvalidTableNumberError extends AppError {
+  constructor(message?: string) {
+    super(message ?? 'Table number must be a positive integer')
+  }
+}
+
+export class InvalidTableCapacityError extends AppError {
+  constructor(message?: string) {
+    super(message ?? 'Table capacity must be a positive integer')
+  }
+}
+
+export class DuplicatedTableNumberError extends AppError {
+  constructor() {
+    super('Table number already exists in this restaurant')
+  }
+}
+

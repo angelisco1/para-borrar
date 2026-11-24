@@ -9,7 +9,9 @@ export class MockTableRepository implements TableRepository {
     }
 
     async findByRestaurantId(restaurantId: string): Promise<Table[]> {
-        return Array.from(this.tables.values()).filter(t => t.restaurantId === restaurantId)
+        return Array.from(this.tables.values())
+            .filter(t => t.restaurantId === restaurantId)
+            .sort((a, b) => a.number - b.number)
     }
 
     async findByNumber(restaurantId: string, number: number): Promise<Table | null> {
