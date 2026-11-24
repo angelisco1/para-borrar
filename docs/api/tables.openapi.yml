@@ -46,7 +46,8 @@ info:
     `InvalidTableNumberError`, `InvalidTableCapacityError`, `InvalidTableStatusError`,
     `DuplicatedTableNumberError`, `TableNotAvailableError` y `TableCapacityExceededError`
     (todos 400). Además, para un `partySize` ausente o inválido se prevé `InvalidPartySizeError`
-    (400) y para un `minCapacity` inválido se reutiliza `InvalidTableCapacityError` (400).
+    (400), para una fecha de reserva inválida `InvalidReservationDataError` (400) y para un
+    `minCapacity` inválido se reutiliza `InvalidTableCapacityError` (400).
 
     ## Consideraciones generales (comportamiento previsto del código)
 
@@ -58,7 +59,10 @@ info:
       crear/editar) se pueden enviar `reservedAt` (fecha/hora prevista) y `reservedFor`
       (nombre o teléfono, texto libre). Ambos son `null` salvo cuando `status = 'reservada'`;
       al pasar a cualquier otro estado se limpian (vuelven a `null`) y se ignoran los valores
-      enviados.
+      enviados. Si `reservedAt` se envía con un formato que no es una fecha ISO 8601 válida
+      (`YYYY-MM-DDTHH:mm:ss.sssZ` u offset), la API responde 400 `InvalidReservationDataError`;
+      la validación se aplica en `PATCH .../status` y al crear o editar una mesa directamente
+      como `reservada`.
     - **Liberación manual**: no hay liberación automática; los empleados (o el admin) marcan la
       mesa como `libre` con `PATCH .../status` cuando el cliente se marcha. La creación,
       preparación o entrega de pedidos no cambia el estado de ninguna mesa.
@@ -332,12 +336,12 @@ paths:
                   summary: number ausente o menor que 1
                   value:
                     error: InvalidTableNumberError
-                    message: 'Table number must be an integer greater than or equal to 1'
+                    message: 'Table number must be a positive integer'
                 capacidadInvalida:
                   summary: capacity ausente o menor que 1
                   value:
                     error: InvalidTableCapacityError
-                    message: 'Table capacity must be an integer greater than or equal to 1'
+                    message: 'Table capacity must be a positive integer'
                 estadoInvalido:
                   summary: status fuera del enum
                   value:
@@ -348,6 +352,11 @@ paths:
                   value:
                     error: DuplicatedTableNumberError
                     message: Table number already exists in this restaurant
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -471,12 +480,12 @@ paths:
                   summary: number ausente o menor que 1
                   value:
                     error: InvalidTableNumberError
-                    message: 'Table number must be an integer greater than or equal to 1'
+                    message: 'Table number must be a positive integer'
                 capacidadInvalida:
                   summary: capacity ausente o menor que 1
                   value:
                     error: InvalidTableCapacityError
-                    message: 'Table capacity must be an integer greater than or equal to 1'
+                    message: 'Table capacity must be a positive integer'
                 estadoInvalido:
                   summary: status fuera del enum
                   value:
@@ -487,6 +496,11 @@ paths:
                   value:
                     error: DuplicatedTableNumberError
                     message: Table number already exists in this restaurant
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -587,12 +601,12 @@ paths:
                   summary: El grupo supera la capacidad de la mesa
                   value:
                     error: TableCapacityExceededError
-                    message: partySize exceeds table capacity
+                    message: Party size exceeds table capacity
                 comensalesInvalidos:
                   summary: partySize ausente o menor que 1
                   value:
                     error: InvalidPartySizeError
-                    message: 'partySize must be an integer greater than or equal to 1'
+                    message: 'Party size must be an integer greater than or equal to 1'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -681,6 +695,11 @@ paths:
                   value:
                     error: InvalidTableStatusError
                     message: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

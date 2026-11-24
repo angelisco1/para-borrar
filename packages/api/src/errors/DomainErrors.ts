@@ -162,3 +162,57 @@ export class OrderNotFoundError extends AppError {
   }
 }
 
+export class TableNotFoundError extends AppError {
+  constructor() {
+    super('Table not found')
+  }
+}
+
+export class InvalidTableStatusError extends AppError {
+  constructor(message?: string) {
+    super(message ?? 'Invalid table status')
+  }
+}
+
+export class InvalidTableNumberError extends AppError {
+  constructor(message?: string) {
+    super(message ?? 'Table number must be a positive integer')
+  }
+}
+
+export class InvalidTableCapacityError extends AppError {
+  constructor(message?: string) {
+    super(message ?? 'Table capacity must be a positive integer')
+  }
+}
+
+export class DuplicatedTableNumberError extends AppError {
+  constructor() {
+    super('Table number already exists in this restaurant')
+  }
+}
+
+export class TableNotAvailableError extends AppError {
+  constructor() {
+    super('Table is not available')
+  }
+}
+
+export class TableCapacityExceededError extends AppError {
+  constructor() {
+    super('Party size exceeds table capacity')
+  }
+}
+
+export class InvalidPartySizeError extends AppError {
+  constructor() {
+    super('Party size must be an integer greater than or equal to 1')
+  }
+}
+
+export class InvalidReservationDataError extends AppError {
+  constructor() {
+    super('Invalid reservation data: reservedAt must be a valid ISO 8601 date-time')
+  }
+}
+
