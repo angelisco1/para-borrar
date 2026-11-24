@@ -1,0 +1,125 @@
+<div class="page-header">
+  <h1>Mesas</h1>
+</div>
+
+@if (tableStore.loading() && tableStore.tables().length === 0) {
+  <div class="spinner"></div>
+}
+
+@if (tableStore.error()) {
+  <div class="alert-error">{{ tableStore.error() }}</div>
+}
+
+@if (orderStore.error()) {
+  <div class="alert-error">{{ orderStore.error() }}</div>
+}
+
+@if (!tableStore.loading() || tableStore.tables().length > 0) {
+  @if (tableStore.tables().length === 0) {
+    <div class="empty-state">
+      <p>No hay mesas en el restaurante</p>
+    </div>
+  } @else {
+    <div class="tables-grid">
+      @for (table of tableStore.tables(); track table.id) {
+        <div class="table-card">
+          <div class="table-header">
+            <span class="table-number">Mesa {{ table.number }}</span>
+            <span [class]="getStatusClass(table.status)">{{ table.status }}</span>
+          </div>
+
+          <div class="table-body">
+            @if (table.description) {
+              <p class="table-description">{{ table.description }}</p>
+            }
+            <p class="table-capacity">{{ table.capacity }} comensales</p>
+
+            @if (table.status === 'reservada') {
+              <div class="reservation-info">
+                @if (table.reservedFor) {
+                  <span class="reservation-for">{{ table.reservedFor }}</span>
+                }
+                @if (table.reservedAt) {
+                  <span class="reservation-at">{{ formatDateTime(table.reservedAt) }}</span>
+                }
+              </div>
+            }
+
+            @if (table.status === 'ocupada') {
+              <div class="table-orders">
+                @if (ordersForTable(table.id).length === 0) {
+                  <p class="no-orders">Sin pedidos activos</p>
+                } @else {
+                  @for (order of ordersForTable(table.id); track order.id) {
+                    <div class="table-order">
+                      <span class="order-id">Pedido #{{ order.id.substring(0, 8) }}</span>
+                      @for (item of order.items; track item.id) {
+                        <div class="order-item">
+                          <div class="item-info">
+                            <span class="item-quantity">{{ item.quantity }}x</span>
+                            <span class="item-name">{{ item.dishName || 'Producto' }}</span>
+                            @if (item.notes) {
+                              <span class="item-notes">{{ item.notes }}</span>
+                            }
+                          </div>
+                          <span [class]="getStatusClass(item.status)">{{ item.status }}</span>
+                        </div>
+                      }
+                    </div>
+                  }
+                }
+              </div>
+            }
+          </div>
+
+          @if (canChangeStatus()) {
+            @if (reservingTableId() === table.id) {
+              <form class="reserve-form" (ngSubmit)="confirmReserve(table)">
+                <div class="form-group">
+                  <label [attr.for]="'reserve-date-' + table.id">Fecha y hora</label>
+                  <input
+                    [id]="'reserve-date-' + table.id"
+                    class="form-control"
+                    type="datetime-local"
+                    [value]="reserveDate()"
+                    (input)="onReserveDateInput($event)"
+                  />
+                </div>
+                <div class="form-group">
+                  <label [attr.for]="'reserve-name-' + table.id">Nombre o teléfono</label>
+                  <input
+                    [id]="'reserve-name-' + table.id"
+                    class="form-control"
+                    type="text"
+                    placeholder="p. ej. Ana Ruiz · 600123456"
+                    [value]="reserveName()"
+                    (input)="onReserveNameInput($event)"
+                  />
+                </div>
+                @if (reserveError()) {
+                  <span class="reserve-error">{{ reserveError() }}</span>
+                }
+                <div class="reserve-actions">
+                  <button type="submit" class="btn btn-sm btn-primary">Confirmar reserva</button>
+                  <button type="button" class="btn btn-sm btn-secondary" (click)="cancelReserve()">Cancelar</button>
+                </div>
+              </form>
+            } @else {
+              <div class="table-actions">
+                @if (table.status !== 'libre') {
+                  <button class="btn btn-sm btn-secondary" (click)="changeStatus(table, 'libre')">Liberar</button>
+                }
+                @if (table.status !== 'ocupada') {
+                  <button class="btn btn-sm btn-secondary" (click)="changeStatus(table, 'ocupada')">Ocupar</button>
+                }
+                @if (table.status !== 'reservada') {
+                  <button class="btn btn-sm btn-primary" (click)="startReserve(table)">Reservar</button>
+                }
+              </div>
+            }
+          }
+        </div>
+      }
+    </div>
+  }
+}

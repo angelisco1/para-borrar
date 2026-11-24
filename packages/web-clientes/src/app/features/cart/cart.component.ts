@@ -1,7 +1,8 @@
-import { Component, inject, signal } from '@angular/core'
+import { Component, computed, inject, signal } from '@angular/core'
 import { Router, RouterLink } from '@angular/router'
 import { DecimalPipe } from '@angular/common'
 import { CartStore } from '../../core/store/cart.store'
+import { DiningSessionStore } from '../../core/store/dining-session.store'
 import { OrderService } from '../../core/services/order.service'
 
 @Component({
@@ -49,6 +50,12 @@ import { OrderService } from '../../core/services/order.service'
               <span>Items ({{ cartStore.itemCount() }})</span>
               <span>{{ cartStore.total() | number:'1.2-2' }} €</span>
             </div>
+            @if (sessionTable(); as table) {
+              <div class="summary-row">
+                <span>Mesa</span>
+                <span>Mesa {{ table.number }} · {{ diningSession.partySize() }} {{ diningSession.partySize() === 1 ? 'comensal' : 'comensales' }}</span>
+              </div>
+            }
             <div class="summary-row total">
               <span>Total</span>
               <strong>{{ cartStore.total() | number:'1.2-2' }} €</strong>
@@ -172,9 +179,16 @@ export class CartComponent {
   readonly cartStore = inject(CartStore)
   private readonly orderService = inject(OrderService)
   private readonly router = inject(Router)
+  readonly diningSession = inject(DiningSessionStore)
 
   readonly loading = signal(false)
   readonly error = signal<string | null>(null)
+
+  readonly sessionTable = computed(() => {
+    const restaurantId = this.cartStore.restaurantId()
+    const table = this.diningSession.table()
+    return table && table.restaurantId === restaurantId ? table : null
+  })
 
   increment(dishId: string): void {
     const item = this.cartStore.items().find(i => i.dish.id === dishId)
@@ -198,6 +212,12 @@ export class CartComponent {
     const restaurantId = this.cartStore.restaurantId()
     if (!restaurantId || this.cartStore.items().length === 0) return
 
+    const table = this.sessionTable()
+    if (!table) {
+      this.router.navigate(['/restaurants', restaurantId])
+      return
+    }
+
     this.loading.set(true)
     this.error.set(null)
 
@@ -207,9 +227,10 @@ export class CartComponent {
       notes: item.notes || null
     }))
 
-    this.orderService.createOrder(restaurantId, items).subscribe({
+    this.orderService.createOrder(restaurantId, table.id, items).subscribe({
       next: (order) => {
         this.cartStore.clear()
+        this.diningSession.clear()
         this.router.navigate(['/orders', order.id])
       },
       error: (err) => {

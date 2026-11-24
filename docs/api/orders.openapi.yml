@@ -1,0 +1,518 @@
+openapi: 3.1.0
+
+info:
+  title: API de pedidos — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI de creación y consulta de pedidos y cambio de estado de sus líneas.
+
+    ## Autenticación
+
+    Todos los endpoints requieren `Authorization: Bearer <token>` con un JWT obtenido en
+    `POST /api/v1/auth/login`. **Ninguna ruta usa `authorize` ni restringe roles**: cualquier
+    rol válido (`admin`, `manager`, `camarero`, `cocinero` o `cliente`) puede ejecutar todas las
+    operaciones. Al crear, `clientId` se toma del claim `id` del token y no del cuerpo.
+
+    ## Formato de errores
+
+    Este recurso captura los errores en sus controladores y **no usa el formato general de
+    `AppError`**. La mayoría de respuestas de error tienen solo `{ "error": "<mensaje>" }`,
+    sin el nombre de la clase ni `message`:
+
+    - Creación: cualquier `Error`, incluidos dominio y SQLite, produce 400 `{ "error": mensaje }`.
+    - Pedido no encontrado en el detalle: 404 `{ "error": "Order not found" }`.
+    - Pedido o línea no encontrados y estado inválido al actualizar línea: 400, no 404.
+    - Token ausente, malformado o inválido: 401 con textos del middleware `authenticate`.
+    - Resto de errores: 500 `{ "error": "Internal Server Error" }` (con espacios), distinto del
+      `InternalServerError`/`Something went wrong` del `errorHandler` global.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - Al crear, `restaurantId` se exige, pero no se valida previamente que el restaurante platos
+      o mesa existan o pertenezcan al mismo restaurante. Las FK de restaurante y plato producen
+      un 400 con el mensaje bruto de SQLite; `orders` no tiene FK hacia `tables`, por lo que un
+      `tableId` arbitrario sí se persiste. Tampoco se exige que la mesa esté libre u ocupada.
+    - El cuerpo debe incluir `items` iterable. No se valida que el array tenga elementos: un
+      array vacío crea un pedido sin líneas. Si `items` falta o no es iterable, la respuesta es
+      400 con el mensaje del error de JavaScript.
+    - Cada línea de entrada se expande en N líneas persistidas con `quantity: 1`, donde N es
+      `quantity` de entrada. Todos los IDs y estados son nuevos y las notas se repiten. No se
+      valida cantidad: 0 o negativa no genera líneas; una fracción positiva genera el techo de N
+      líneas por el bucle `for (i = 0; i < quantity; i++)`; cantidades grandes pueden crear
+      muchas filas. No se validan IDs vacíos ni tipos antes de llegar a SQLite.
+    - La creación responde el pedido sin datos enriquecidos de platos o restaurante. Los GET sí
+      añaden `dishName`, `dishPrice` y `dishCategory` en cada línea; el detalle y «mis pedidos»
+      añaden también `restaurantName` y `restaurantLogoUrl`. Con relaciones rotas, los campos
+      enriquecidos pueden ser `null`.
+    - `GET /orders/active` exige el query param `restaurantId` como cadena y devuelve pedidos con
+      al menos una línea no entregada, del más antiguo al más reciente. Las líneas entregadas de
+      esos pedidos también aparecen. Un pedido sin líneas nunca está activo.
+    - `GET /orders/mine` filtra por el `clientId` del token, del más reciente al más antiguo. No
+      se limita al rol `cliente`: un empleado verá los pedidos creados con su propio token.
+    - `GET /orders/{id}` no comprueba propietario ni restaurante. Cualquier usuario autenticado
+      que conozca el ID puede consultarlo. El cambio de estado de línea tampoco comprueba rol,
+      propietario ni transición: acepta `pendiente`, `preparando`, `listo` y `entregado`, con
+      normalización `trim().toLowerCase()`. Una línea inexistente usa `OrderNotFoundError` y 400.
+    - La creación o entrega de pedidos no modifica mesas ni stock. Los listados no tienen
+      paginación.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Pedidos
+    description: Creación, historial, pedidos activos y estados de líneas; todos requieren JWT, sin control de roles.
+
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      tags: [Pedidos]
+      summary: Crear un pedido
+      description: |
+        Crea un pedido para el usuario del token y expande cada línea en unidades independientes
+        con estado `pendiente`. Cualquier rol autenticado puede crearlo. `clientId` se ignora si
+        viene en el cuerpo: siempre se usa el claim `id` del JWT.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOrderInput' }
+            examples:
+              pedidoMesa5:
+                value:
+                  restaurantId: rest-1
+                  tableId: table-rest-1-5
+                  items:
+                    - dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                      quantity: 2
+                      notes: Muy hecha
+                    - dishId: 3086a8de-e27a-45e7-a82e-e64a15972530
+                      quantity: 1
+                      notes: null
+      responses:
+        '201':
+          description: |
+            Pedido creado. La solicitud con dos pizzas devuelve dos líneas separadas de pizza,
+            cada una con `quantity: 1`, IDs propios y estado `pendiente`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+              examples:
+                pedidoCreado:
+                  value:
+                    id: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+                    restaurantId: rest-1
+                    tableId: table-rest-1-5
+                    clientId: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+                    createdAt: '2026-11-24T13:15:00.000Z'
+                    items:
+                      - id: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+                        dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                        quantity: 1
+                        notes: Muy hecha
+                        status: pendiente
+                      - id: d7fe59f0-2488-4f6d-a55d-2ab96f126477
+                        dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                        quantity: 1
+                        notes: Muy hecha
+                        status: pendiente
+                      - id: fdf48ce2-f055-43ec-abd2-8a7f541a97c1
+                        dishId: 3086a8de-e27a-45e7-a82e-e64a15972530
+                        quantity: 1
+                        notes: null
+                        status: pendiente
+        '400':
+          description: |
+            Restaurante ausente, `items` no iterable o cualquier otro `Error` del servicio o de
+            SQLite. El cuerpo contiene directamente el mensaje del error, sin `message`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+              examples:
+                restauranteObligatorio:
+                  value: { error: Restaurant ID is required }
+                itemsAusentes:
+                  value: { error: request.items is not iterable }
+                restauranteInexistente:
+                  value: { error: 'SQLITE_CONSTRAINT: FOREIGN KEY constraint failed' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /orders/active:
+    get:
+      operationId: listActiveOrders
+      tags: [Pedidos]
+      summary: Listar pedidos activos de un restaurante
+      description: |
+        Devuelve pedidos con al menos una línea cuyo estado no sea `entregado`, ordenados por
+        creación ascendente. Cualquier rol puede consultar cualquier restaurante.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: restaurantId
+          in: query
+          required: true
+          description: Identificador exacto del restaurante. Debe llegar como una única cadena.
+          schema: { type: string }
+          example: rest-1
+      responses:
+        '200':
+          description: Pedidos activos con todas sus líneas y datos enriquecidos de platos.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Order' }
+              examples:
+                activosRest1:
+                  value:
+                    - id: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+                      restaurantId: rest-1
+                      tableId: table-rest-1-5
+                      clientId: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+                      createdAt: '2026-11-24T13:15:00.000Z'
+                      items:
+                        - id: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+                          dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                          quantity: 1
+                          notes: Muy hecha
+                          status: preparando
+                          dishName: Pizza Margarita
+                          dishPrice: 12.5
+                          dishCategory: principal
+                        - id: d7fe59f0-2488-4f6d-a55d-2ab96f126477
+                          dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                          quantity: 1
+                          notes: Muy hecha
+                          status: entregado
+                          dishName: Pizza Margarita
+                          dishPrice: 12.5
+                          dishCategory: principal
+        '400':
+          description: Falta `restaurantId` o no es una cadena.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+              examples:
+                obligatorio:
+                  value: { error: restaurantId is required }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /orders/mine:
+    get:
+      operationId: listMyOrders
+      tags: [Pedidos]
+      summary: Listar los pedidos del usuario autenticado
+      description: |
+        Filtra por el claim `id` del JWT y ordena por creación descendente. No exige rol
+        `cliente`. Incluye datos del restaurante y de los platos.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Pedidos asociados al usuario del token.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Order' }
+              examples:
+                historial:
+                  value:
+                    - id: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+                      restaurantId: rest-1
+                      tableId: table-rest-1-5
+                      clientId: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+                      createdAt: '2026-11-24T13:15:00.000Z'
+                      items:
+                        - id: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+                          dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                          quantity: 1
+                          notes: Muy hecha
+                          status: entregado
+                          dishName: Pizza Margarita
+                          dishPrice: 12.5
+                          dishCategory: principal
+                      restaurantName: Restaurante El Gourmet
+                      restaurantLogoUrl: null
+        '401':
+          description: |
+            Token ausente, malformado o inválido (`authenticate`), o token válido sin claim
+            `id` (respuesta `{ "error": "Unauthorized" }` del controlador).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+              examples:
+                sinToken: { value: { error: 'Unauthorized: No token provided' } }
+                tokenMalformado: { value: { error: 'Unauthorized: Malformed token' } }
+                tokenInvalido: { value: { error: 'Unauthorized: Invalid token' } }
+                sinId: { value: { error: Unauthorized } }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [Pedidos]
+      summary: Obtener un pedido
+      description: |
+        Devuelve el pedido y los datos enriquecidos de restaurante y platos. Cualquier usuario
+        autenticado puede consultarlo; no hay comprobación de propietario o restaurante.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identificador UUID del pedido.
+          schema: { type: string, format: uuid }
+          example: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+      responses:
+        '200':
+          description: Pedido encontrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+              examples:
+                detalle:
+                  value:
+                    id: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+                    restaurantId: rest-1
+                    tableId: table-rest-1-5
+                    clientId: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+                    createdAt: '2026-11-24T13:15:00.000Z'
+                    items:
+                      - id: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+                        dishId: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+                        quantity: 1
+                        notes: Muy hecha
+                        status: preparando
+                        dishName: Pizza Margarita
+                        dishPrice: 12.5
+                        dishCategory: principal
+                    restaurantName: Restaurante El Gourmet
+                    restaurantLogoUrl: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No existe el pedido; el cuerpo contiene únicamente el mensaje.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+              examples:
+                noEncontrado: { value: { error: Order not found } }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /orders/{orderId}/items/{itemId}/status:
+    patch:
+      operationId: updateOrderItemStatus
+      tags: [Pedidos]
+      summary: Cambiar el estado de una línea de pedido
+      description: |
+        Actualiza una línea concreta y responde sin cuerpo. No hay restricción de roles ni
+        reglas de transición. Si el pedido o la línea no existe, responde 400 `Order not found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          description: Identificador UUID del pedido.
+          schema: { type: string, format: uuid }
+          example: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+        - name: itemId
+          in: path
+          required: true
+          description: Identificador UUID de la línea dentro del pedido.
+          schema: { type: string, format: uuid }
+          example: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateOrderItemStatusInput' }
+            examples:
+              preparando:
+                value: { status: PREPARANDO }
+      responses:
+        '204':
+          description: Estado actualizado, sin cuerpo.
+        '400':
+          description: Pedido o línea no encontrados, o estado fuera del enum.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+              examples:
+                noEncontrado: { value: { error: Order not found } }
+                estadoInvalido:
+                  value: { error: 'Estado inválido: cancelado. Debe ser uno de: pendiente, preparando, listo, entregado' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtenido en `POST /api/v1/auth/login`; no hay control de roles en este recurso.
+
+  responses:
+    Unauthorized:
+      description: Token ausente, malformado o inválido; el cuerpo solo contiene `error`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OrderErrorResponse' }
+          examples:
+            sinToken: { value: { error: 'Unauthorized: No token provided' } }
+            tokenMalformado: { value: { error: 'Unauthorized: Malformed token' } }
+            tokenInvalido: { value: { error: 'Unauthorized: Invalid token' } }
+    InternalServerError:
+      description: Error capturado por el controlador de pedidos; usa un texto distinto del error global.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OrderInternalErrorResponse' }
+          examples:
+            errorInterno: { value: { error: Internal Server Error } }
+
+  schemas:
+    OrderStatus:
+      type: string
+      enum: [pendiente, preparando, listo, entregado]
+      example: pendiente
+
+    CreateOrderItemInput:
+      type: object
+      required: [dishId, quantity]
+      properties:
+        dishId:
+          type: string
+          description: ID del plato; no se valida en negocio y una FK fallida produce 400.
+          example: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+        quantity:
+          type: number
+          description: Número de iteraciones del bucle de expansión; no se valida que sea entero o positivo.
+          example: 2
+        notes:
+          type: [string, 'null']
+          description: Texto libre repetido en todas las líneas generadas.
+          example: Muy hecha
+
+    CreateOrderInput:
+      type: object
+      required: [restaurantId, items]
+      properties:
+        restaurantId:
+          type: string
+          minLength: 1
+          example: rest-1
+        tableId:
+          type: [string, 'null']
+          description: Opcional; se guarda `null` si se omite y no se valida contra mesas.
+          example: table-rest-1-5
+        items:
+          type: array
+          description: Puede ser vacío; cada entrada se convierte en N líneas unitarias.
+          items: { $ref: '#/components/schemas/CreateOrderItemInput' }
+
+    OrderItem:
+      type: object
+      required: [id, dishId, quantity, notes, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 754b7700-89bc-4b8e-8d23-fc209ef2cd20
+        dishId:
+          type: string
+          example: e2a3d255-4c7a-4db1-a1fa-283f1f480ea0
+        quantity:
+          type: integer
+          description: En los pedidos nuevos siempre es 1; el seed puede contener otros valores.
+          example: 1
+        notes:
+          type: [string, 'null']
+          example: Muy hecha
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        dishName:
+          type: [string, 'null']
+          description: Solo aparece en los GET al consultar el repositorio; puede ser `null` si el plato no resuelve.
+          example: Pizza Margarita
+        dishPrice:
+          type: [number, 'null']
+          example: 12.5
+        dishCategory:
+          type: [string, 'null']
+          example: principal
+
+    Order:
+      type: object
+      required: [id, restaurantId, tableId, clientId, createdAt, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 2ab29c97-bc32-4a90-b0c3-bb602d64b534
+        restaurantId:
+          type: string
+          example: rest-1
+        tableId:
+          type: [string, 'null']
+          example: table-rest-1-5
+        clientId:
+          type: [string, 'null']
+          description: Tomado del token; no se acepta como campo de entrada.
+          example: d4b5901f-48a1-4e58-a4c6-bb591aa79f32
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-24T13:15:00.000Z'
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+        restaurantName:
+          type: [string, 'null']
+          description: Presente en detalle y «mis pedidos», no en creación ni listado activo.
+          example: Restaurante El Gourmet
+        restaurantLogoUrl:
+          type: [string, 'null']
+          example: null
+
+    UpdateOrderItemStatusInput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: Se normaliza a pendiente, preparando, listo o entregado; cualquier transición está permitida.
+          example: PREPARANDO
+
+    OrderErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Mensaje de dominio, middleware, JavaScript o SQLite, sin campo `message`.
+          example: Order not found
+
+    OrderInternalErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          const: Internal Server Error

@@ -1,0 +1,405 @@
+openapi: 3.1.0
+
+info:
+  title: API de ingredientes — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI del inventario de ingredientes por restaurante.
+
+    ## Autenticación
+
+    Todos los endpoints requieren `Authorization: Bearer <token>`. Crear, actualizar y borrar
+    exige rol `admin`. Los listados y detalles admiten `admin`, `manager` y `cocinero`; el rol
+    `camarero` recibe 403. No se comprueba que el restaurante del token coincida con el de la
+    ruta.
+
+    ## Formato de errores
+
+    Los errores de dominio devuelven `{ "error": "<NombreDelError>", "message": "<descripción>" }`
+    con 400, salvo `IngredientNotFoundError`, que devuelve 404. Los middlewares de acceso
+    devuelven `{ "error": "<descripción>" }` sin `message`: 401 por token ausente, malformado o
+    inválido y 403 por permisos insuficientes. Los errores no controlados devuelven
+    `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - Las unidades válidas son `kg`, `g`, `l`, `ml` y `unidad`; se normalizan con
+      `trim().toLowerCase()`. Por eso el valor `L` insertado por el seed se devuelve como `l`.
+    - El nombre se valida contra cadenas vacías, pero se guarda sin recortar. El stock solo se
+      comprueba con `currentStock < 0`: no hay validación explícita de tipo, finitud o enteros.
+    - En la creación, `currentStock` vale 0 si se omite. En el PUT se espera el recurso editable
+      completo; omitir `currentStock` puede llegar a la columna `NOT NULL` de SQLite y causar
+      un 500.
+    - No se valida en la capa de negocio que `restaurantId` exista. Una creación con un
+      restaurante inexistente incumple la clave foránea y termina en 500. El listado para un
+      restaurante inexistente devuelve `[]`.
+    - **El parámetro `restaurantId` se ignora en detalle, actualización y borrado.** Estas
+      operaciones buscan únicamente por `id`; con un identificador conocido se puede leer,
+      modificar o borrar un ingrediente perteneciente a otro restaurante. En el PUT se conserva
+      el restaurante original.
+    - Borrar un ingrediente referenciado por `dish_ingredients` falla por clave foránea y
+      devuelve 500; no se desvincula automáticamente de los platos ni se devuelve un 409.
+    - No hay control de concurrencia ni ajuste de stock al crear o entregar pedidos. Los listados
+      no tienen paginación ni orden explícito.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Ingredientes
+    description: Inventario de ingredientes y stock por restaurante.
+
+paths:
+  /restaurants/{restaurantId}/ingredients:
+    post:
+      operationId: createIngredient
+      tags: [Ingredientes]
+      summary: Crear un ingrediente
+      description: Crea un ingrediente asociado al restaurante de la ruta. Requiere rol `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateIngredientInput' }
+            examples:
+              tomate:
+                value: { name: Tomate, unit: kg, currentStock: 10 }
+              stockInicialCero:
+                value: { name: Harina, unit: KG }
+      responses:
+        '201':
+          description: Ingrediente creado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ingredient' }
+              examples:
+                creado:
+                  value:
+                    id: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                    name: Tomate
+                    unit: kg
+                    currentStock: 10
+                    restaurantId: rest-1
+                    createdAt: '2026-11-24T12:00:00.000Z'
+                    updatedAt: '2026-11-24T12:00:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listIngredients
+      tags: [Ingredientes]
+      summary: Listar ingredientes de un restaurante
+      description: |
+        Devuelve todos los ingredientes del restaurante de la ruta, sin paginación. Roles
+        permitidos: `admin`, `manager` y `cocinero`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Ingredientes encontrados; una ruta inexistente devuelve un array vacío.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Ingredient' }
+              examples:
+                inventarioRest1:
+                  value:
+                    - id: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                      name: Tomate
+                      unit: kg
+                      currentStock: 10
+                      restaurantId: rest-1
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+                    - id: 47c00bd7-f1cf-4a7c-a9d6-f6db35a29b40
+                      name: Aceite de oliva
+                      unit: l
+                      currentStock: 10
+                      restaurantId: rest-1
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/ingredients/{id}:
+    get:
+      operationId: getIngredient
+      tags: [Ingredientes]
+      summary: Obtener un ingrediente
+      description: |
+        Busca el ingrediente por `id`, sin contrastarlo con `restaurantId`. Roles permitidos:
+        `admin`, `manager` y `cocinero`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/IngredientId'
+      responses:
+        '200':
+          description: Ingrediente encontrado, incluso si pertenece a otro restaurante de la ruta.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ingredient' }
+              examples:
+                tomate:
+                  value:
+                    id: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                    name: Tomate
+                    unit: kg
+                    currentStock: 10
+                    restaurantId: rest-1
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-20T10:00:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: updateIngredient
+      tags: [Ingredientes]
+      summary: Reemplazar un ingrediente
+      description: |
+        Actualiza nombre, unidad y stock por `id`; conserva el restaurante original e ignora el
+        `restaurantId` de la ruta. Requiere rol `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/IngredientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateIngredientInput' }
+            examples:
+              stockActualizado:
+                value: { name: Tomate, unit: kg, currentStock: 7.5 }
+      responses:
+        '200':
+          description: Ingrediente actualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ingredient' }
+              examples:
+                actualizado:
+                  value:
+                    id: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+                    name: Tomate
+                    unit: kg
+                    currentStock: 7.5
+                    restaurantId: rest-1
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T12:30:00.000Z'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: deleteIngredient
+      tags: [Ingredientes]
+      summary: Borrar un ingrediente
+      description: |
+        Borra por `id`, sin contrastar el restaurante. Requiere rol `admin`. Si el ingrediente
+        está referenciado por un plato, SQLite rechaza el borrado y la API responde 500.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/IngredientId'
+      responses:
+        '204':
+          description: Ingrediente borrado, sin cuerpo.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtenido en `POST /api/v1/auth/login`.
+
+  parameters:
+    RestaurantId:
+      name: restaurantId
+      in: path
+      required: true
+      description: Restaurante de la ruta. Solo se usa en creación y listado; las operaciones por `id` lo ignoran.
+      schema: { type: string }
+      example: rest-1
+    IngredientId:
+      name: id
+      in: path
+      required: true
+      description: Identificador UUID del ingrediente.
+      schema: { type: string, format: uuid }
+      example: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+
+  responses:
+    ValidationError:
+      description: Nombre o unidad ausentes o inválidos, unidad fuera del enum o stock negativo.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            nombreObligatorio:
+              value: { error: IngredientNameRequiredError, message: Ingredient name is required }
+            unidadObligatoria:
+              value: { error: InvalidUnitError, message: Unit must be provided }
+            unidadInvalida:
+              value: { error: InvalidUnitError, message: 'Invalid unit: litros. Must be one of: kg, g, l, ml, unidad' }
+            stockNegativo:
+              value: { error: NegativeStockError, message: Stock cannot be negative }
+    Unauthorized:
+      description: Token ausente, malformado o inválido; el cuerpo solo contiene `error`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinToken: { value: { error: 'Unauthorized: No token provided' } }
+            tokenMalformado: { value: { error: 'Unauthorized: Malformed token' } }
+            tokenInvalido: { value: { error: 'Unauthorized: Invalid token' } }
+    Forbidden:
+      description: El rol autenticado no está entre los permitidos para la operación.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinPermisos: { value: { error: 'Forbidden: Insufficient permissions' } }
+    NotFound:
+      description: No existe ningún ingrediente con ese `id`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            noEncontrado:
+              value: { error: IngredientNotFoundError, message: Ingredient not found }
+    InternalServerError:
+      description: Error no controlado, incluidos los fallos de claves foráneas de SQLite.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+          examples:
+            errorInterno:
+              value: { error: InternalServerError, message: Something went wrong }
+
+  schemas:
+    IngredientUnit:
+      type: string
+      enum: [kg, g, l, ml, unidad]
+      description: Se normaliza con `trim().toLowerCase()` antes de validar.
+      example: kg
+
+    Ingredient:
+      type: object
+      required: [id, name, unit, currentStock, restaurantId, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 9ca9472d-e4f5-40b0-908b-df0d4b650122
+        name:
+          type: string
+          example: Tomate
+        unit:
+          $ref: '#/components/schemas/IngredientUnit'
+        currentStock:
+          type: number
+          example: 10
+        restaurantId:
+          type: string
+          example: rest-1
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T10:00:00.000Z'
+
+    CreateIngredientInput:
+      type: object
+      required: [name, unit]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Tomate
+        unit:
+          type: string
+          description: Unidad de entrada; se normaliza a kg, g, l, ml o unidad antes de validar.
+          example: KG
+        currentStock:
+          type: number
+          minimum: 0
+          default: 0
+          description: Opcional al crear; por defecto 0.
+          example: 10
+
+    UpdateIngredientInput:
+      type: object
+      required: [name, unit, currentStock]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Tomate
+        unit:
+          $ref: '#/components/schemas/IngredientUnit'
+        currentStock:
+          type: number
+          minimum: 0
+          example: 7.5
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: IngredientNotFoundError }
+        message: { type: string, example: Ingredient not found }
+    AuthErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: 'Unauthorized: Invalid token' }
+    InternalErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, const: InternalServerError }
+        message: { type: string, const: Something went wrong }

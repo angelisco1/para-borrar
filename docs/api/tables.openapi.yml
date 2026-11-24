@@ -1,0 +1,1093 @@
+openapi: 3.1.0
+
+info:
+  title: API de mesas — Resttek
+  version: 1.0.1
+  description: |
+    Contrato OpenAPI de la gestión de **mesas** de Resttek (issue #5, «Gestión de mesas»).
+
+    > **Estado: contrato implementado.** Este documento describe el comportamiento real de los
+    > endpoints de mesas de `packages/api` y sirve de referencia para los tres frontends
+    > (`web-admin`, `web-empleados`, `web-clientes`).
+
+    Las mesas son una entidad de primer nivel perteneciente a un restaurante: el administrador
+    las gestiona (crear, editar, borrar), el personal del restaurante consulta su estado y lo
+    modifica, y el cliente elige una mesa libre según el número de comensales antes de acceder
+    a la carta y pedir. El modelo `Table` incluye dos campos de reserva opcionales (D6):
+    `reservedAt` (fecha/hora prevista de la reserva) y `reservedFor` (nombre o teléfono de quien
+    reserva), que solo tienen valor cuando `status = 'reservada'`.
+
+    ## Autenticación
+
+    - Los endpoints privados requieren un token JWT en la cabecera
+      `Authorization: Bearer <token>`, obtenido en `POST /api/v1/auth/login`.
+      El middleware `authenticate` valida el token y el middleware `authorize` restringe el
+      acceso por rol. Roles disponibles: `admin`, `manager`, `camarero`, `cocinero` y `cliente`.
+    - El único endpoint público (sin autenticación, estilo `*.public.routes.ts`) es
+      `GET /public/restaurants/{restaurantId}/tables`.
+    - Cada operación indica en `security` si requiere `bearerAuth` y, en su `description`,
+      los roles exactos que exige `authorize`.
+
+    ## Formato de errores
+
+    La API devuelve dos formatos de cuerpo de error según el origen (comportamiento real del
+    código en `packages/api`):
+
+    - **Errores de dominio** (`AppError` procesados por el `errorHandler` de
+      `contexts/shared/infrastructure/http`): cuerpo `{ "error": "<NombreDelError>", "message": "<descripción>" }`.
+      Por defecto responden HTTP 400; `TableNotFoundError` se mapea a 404.
+    - **Middlewares de autenticación/autorización** (`authenticate` / `authorize`): cuerpo
+      `{ "error": "<descripción>" }` (sin `message`): `401 Unauthorized: No token provided`,
+      `401 Unauthorized: Malformed token`, `401 Unauthorized: Invalid token` y
+      `403 Forbidden: Insufficient permissions`.
+    - **Errores no controlados**: `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+
+    Errores de dominio implementados para las mesas: `TableNotFoundError` (404),
+    `InvalidTableNumberError`, `InvalidTableCapacityError`, `InvalidTableStatusError`,
+    `DuplicatedTableNumberError`, `TableNotAvailableError` y `TableCapacityExceededError`
+    (todos 400). Además, para un `partySize` ausente o inválido se devuelve `InvalidPartySizeError`
+    (400), para una fecha de reserva inválida `InvalidReservationDataError` (400) y para un
+    `minCapacity` inválido se reutiliza `InvalidTableCapacityError` (400).
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - **Ocupación al pulsar «Continuar»**: el cliente elige una mesa libre según el número de
+      comensales y, al confirmar, la UI llama a
+      `POST /restaurants/{restaurantId}/tables/{tableId}/occupy` con `{ "partySize": n }`;
+      la mesa pasa a `ocupada`. Requiere estar autenticado (cualquier rol).
+    - **Reservas con datos simples** (D6): al marcar `reservada` (vía `PATCH .../status` o al
+      crear/editar) se pueden enviar `reservedAt` (fecha/hora prevista) y `reservedFor`
+      (nombre o teléfono, texto libre). Ambos son `null` salvo cuando `status = 'reservada'`;
+      al pasar a cualquier otro estado se limpian (vuelven a `null`) y se ignoran los valores
+      enviados. Si `reservedAt` se envía con un formato que no es una fecha ISO 8601 válida
+      (`YYYY-MM-DDTHH:mm:ss.sssZ` u offset), la API responde 400 `InvalidReservationDataError`;
+      la validación se aplica en `PATCH .../status` y al crear o editar una mesa directamente
+      como `reservada`.
+    - **Liberación manual**: no hay liberación automática; los empleados (o el admin) marcan la
+      mesa como `libre` con `PATCH .../status` cuando el cliente se marcha. La creación,
+      preparación o entrega de pedidos no cambia el estado de ninguna mesa.
+    - **Borrado con pedidos**: se permite borrar una mesa con pedidos asociados; los pedidos
+      conservan su `tableId`, que queda huérfano (la tabla `orders` no tiene clave foránea a
+      mesas). Los frontends deben tolerar pedidos cuyo `tableId` ya no resuelve a ninguna mesa.
+    - **La creación de pedidos no valida la mesa** (DEC5 del plan): `POST /api/v1/orders` no
+      comprueba que la mesa exista ni esté ocupada; la coherencia entre pedido y mesa es
+      responsabilidad del flujo de la UI.
+    - **`cocinero` no cambia estados** (D2): `PATCH .../status` solo lo pueden usar `admin`,
+      `manager` y `camarero`. El rol `cocinero` puede consultar mesas (`GET`), pero no
+      modificarlas.
+    - **Número único por restaurante**: restricción `UNIQUE(restaurant_id, number)`; crear o
+      editar con un número ya usado en el restaurante responde 400 `DuplicatedTableNumberError`.
+    - **Orden y filtros**: `GET /restaurants/{restaurantId}/tables` devuelve todas las mesas
+      ordenadas por `number` ascendente y admite un filtro opcional por `status`; el listado
+      público solo devuelve mesas con `status = 'libre'` y `capacity >= minCapacity`
+      (por defecto 1), también ordenadas por `number`.
+    - **Pedidos activos por mesa**: la pantalla de empleados reutiliza el contrato existente
+      `GET /api/v1/orders/active?restaurantId=rest-1`; cada pedido incluye un `tableId` que
+      coincide con `Table.id`.
+    - **Normalización**: igual que `normalizeOrderStatus`, los valores de `status` se
+      normalizan (minúsculas y sin espacios) antes de validarlos.
+    - **Restaurante inexistente**: los listados no comprueban que `restaurantId` exista y
+      devuelven `[]`; la creación con un restaurante inexistente falla en la clave foránea de
+      SQLite y termina en 500. En las operaciones por `tableId` (detalle, PUT, DELETE, ocupar y
+      cambiar estado), el `restaurantId` de la ruta se ignora: se busca solo por `tableId`, se
+      conserva el restaurante original y no se garantiza que coincida con el de la ruta.
+    - **Datos de reserva**: `reservedFor` es texto libre que no se recorta ni valida. Los campos
+      `status` son obligatorios en PUT y PATCH; valores ausentes o de tipos incompatibles pueden
+      provocar un error de JavaScript y una respuesta 500 en lugar de un error de dominio 400.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local (destino del proxy /api de los tres frontends)
+
+tags:
+  - name: Mesas (público)
+    description: >
+      Consulta de mesas libres de un restaurante sin autenticación, para la pantalla de
+      elección de mesa del cliente (paso previo a la carta y al pedido).
+  - name: Mesas (cliente)
+    description: >
+      Ocupación de una mesa elegida por un cliente autenticado. Cualquier rol puede llamarla,
+      pero su consumidor natural es el flujo de pedido del cliente (web-clientes).
+  - name: Mesas (admin)
+    description: >
+      Gestión completa de mesas por el administrador: crear, editar y borrar (solo rol `admin`).
+  - name: Mesas (empleados)
+    description: >
+      Operativas para el personal del restaurante: consultar mesas y cambiar su estado.
+      `GET`: `admin`, `manager`, `camarero` y `cocinero`; `PATCH .../status`: `admin`,
+      `manager` y `camarero` (sin `cocinero`, D2).
+
+paths:
+  /public/restaurants/{restaurantId}/tables:
+    get:
+      operationId: listFreeTables
+      tags:
+        - Mesas (público)
+      summary: Listar mesas libres de un restaurante
+      description: |
+        Devuelve solo las mesas con `status = 'libre'` y `capacity >= minCapacity`, ordenadas
+        por `number` ascendente. Endpoint público (sin autenticación): lo usa la pantalla de
+        elección de mesa del cliente antes de acceder a la carta. Los datos de reserva
+        (`reservedAt` / `reservedFor`) siempre llegan como `null`, porque solo se informan en
+        el estado `reservada`, que este endpoint excluye.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/MinCapacity'
+      responses:
+        '200':
+          description: Mesas libres que cumplen el filtro, ordenadas por `number`.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Table'
+              examples:
+                mesasLibres:
+                  summary: Mesas libres de rest-1 con aforo para 4 comensales o más
+                  value:
+                    - id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                      restaurantId: rest-1
+                      number: 5
+                      description: Mesa junto a la ventana
+                      capacity: 4
+                      status: libre
+                      reservedAt: null
+                      reservedFor: null
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+                    - id: e5c7a9b1-3333-4e7f-8d0a-1b2c3d4e5f60
+                      restaurantId: rest-1
+                      number: 8
+                      description: Mesa grande del fondo
+                      capacity: 6
+                      status: libre
+                      reservedAt: null
+                      reservedFor: null
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+        '400':
+          description: '`minCapacity` no es un entero mayor o igual que 1.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                minCapacityInvalido:
+                  summary: minCapacity inválido
+                  value:
+                    error: InvalidTableCapacityError
+                    message: 'minCapacity must be an integer greater than or equal to 1'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/tables:
+    get:
+      operationId: listTables
+      tags:
+        - Mesas (empleados)
+      summary: Listar todas las mesas de un restaurante
+      description: |
+        Devuelve todas las mesas del restaurante con cualquier estado, ordenadas por `number`
+        ascendente. Admite un filtro opcional por `status`. Requiere autenticación; roles
+        permitidos: `admin`, `manager`, `camarero` y `cocinero`. Es la consulta que usa la
+        pantalla de mesas del personal (web-empleados) y el panel de administración (web-admin).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableStatusFilter'
+      responses:
+        '200':
+          description: Mesas del restaurante (todos los estados), ordenadas por `number`.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Table'
+              examples:
+                todasLasMesas:
+                  summary: Mesas 2, 5 y 7 de rest-1 (un ejemplo de cada estado)
+                  value:
+                    - id: d2b4f6a8-2222-4c6d-9e8f-0a1b2c3d4e5f
+                      restaurantId: rest-1
+                      number: 2
+                      description: Mesa en la terraza
+                      capacity: 4
+                      status: ocupada
+                      reservedAt: null
+                      reservedFor: null
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-24T13:15:00.000Z'
+                    - id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                      restaurantId: rest-1
+                      number: 5
+                      description: Mesa junto a la ventana
+                      capacity: 4
+                      status: libre
+                      reservedAt: null
+                      reservedFor: null
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-20T10:00:00.000Z'
+                    - id: c9a1e2b3-1111-4a5b-8c6d-9e0f1a2b3c4d
+                      restaurantId: rest-1
+                      number: 7
+                      description: Mesa pequeña del interior
+                      capacity: 2
+                      status: reservada
+                      reservedAt: '2026-11-24T20:30:00.000Z'
+                      reservedFor: 'Ana Ruiz · 600123456'
+                      createdAt: '2026-11-20T10:00:00.000Z'
+                      updatedAt: '2026-11-24T18:45:00.000Z'
+        '400':
+          description: El filtro `status` no es un estado válido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                estadoInvalido:
+                  summary: status de filtro fuera del enum
+                  value:
+                    error: InvalidTableStatusError
+                    message: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: createTable
+      tags:
+        - Mesas (admin)
+      summary: Crear una mesa
+      description: |
+        Crea una mesa en el restaurante indicado. Requiere autenticación; solo el rol `admin`
+        puede crear mesas. `number` y `capacity` son obligatorios; `description`, `status`,
+        `reservedAt` y `reservedFor` son opcionales (`status` por defecto `libre`). El número
+        de mesa debe ser único dentro del restaurante (`UNIQUE(restaurant_id, number)`).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTableInput'
+            examples:
+              mesaLibre:
+                summary: Mesa estándar (estado por defecto libre)
+                value:
+                  number: 5
+                  description: Mesa junto a la ventana
+                  capacity: 4
+              mesaReservada:
+                summary: Mesa creada directamente como reservada, con datos de reserva (D6)
+                value:
+                  number: 9
+                  capacity: 2
+                  status: reservada
+                  reservedAt: '2026-11-24T20:30:00.000Z'
+                  reservedFor: 'Ana Ruiz · 600123456'
+      responses:
+        '201':
+          description: Mesa creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+              examples:
+                mesaCreada:
+                  summary: Mesa 5 creada como libre
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana
+                    capacity: 4
+                    status: libre
+                    reservedAt: null
+                    reservedFor: null
+                    createdAt: '2026-11-24T12:00:00.000Z'
+                    updatedAt: '2026-11-24T12:00:00.000Z'
+                mesaReservadaCreada:
+                  summary: Mesa 9 creada directamente como reservada
+                  value:
+                    id: f8d0b2c4-4444-4051-9a2b-2c3d4e5f6071
+                    restaurantId: rest-1
+                    number: 9
+                    description: null
+                    capacity: 2
+                    status: reservada
+                    reservedAt: '2026-11-24T20:30:00.000Z'
+                    reservedFor: 'Ana Ruiz · 600123456'
+                    createdAt: '2026-11-24T12:00:00.000Z'
+                    updatedAt: '2026-11-24T12:00:00.000Z'
+        '400':
+          description: |
+            Validación de dominio fallida: número o capacidad inválidos, estado fuera del
+            enum, número duplicado en el restaurante o fecha de reserva inválida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                numeroInvalido:
+                  summary: number ausente o menor que 1
+                  value:
+                    error: InvalidTableNumberError
+                    message: 'Table number must be a positive integer'
+                capacidadInvalida:
+                  summary: capacity ausente o menor que 1
+                  value:
+                    error: InvalidTableCapacityError
+                    message: 'Table capacity must be a positive integer'
+                estadoInvalido:
+                  summary: status fuera del enum
+                  value:
+                    error: InvalidTableStatusError
+                    message: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+                numeroDuplicado:
+                  summary: Ya existe una mesa con ese número en el restaurante
+                  value:
+                    error: DuplicatedTableNumberError
+                    message: Table number already exists in this restaurant
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/tables/{tableId}:
+    get:
+      operationId: getTable
+      tags:
+        - Mesas (empleados)
+      summary: Obtener una mesa
+      description: |
+        Devuelve una mesa concreta por su identificador. Requiere autenticación; roles
+        permitidos: `admin`, `manager`, `camarero` y `cocinero`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableId'
+      responses:
+        '200':
+          description: Mesa encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+              examples:
+                mesa:
+                  summary: Mesa 5 de rest-1, libre
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana
+                    capacity: 4
+                    status: libre
+                    reservedAt: null
+                    reservedFor: null
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-20T10:00:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: updateTable
+      tags:
+        - Mesas (admin)
+      summary: Reemplazar una mesa
+      description: |
+        Reemplaza todos los campos editables de la mesa (PUT completo, como el resto de la
+        API). Requiere autenticación; solo el rol `admin`. `number`, `capacity` y `status` son
+        obligatorios; `description`, `reservedAt` y `reservedFor` son opcionales y se guardan
+        como `null` si no se envían. `reservedAt` / `reservedFor` solo persisten cuando
+        `status = 'reservada'` (D6); con cualquier otro estado se limpian aunque se envíen.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTableInput'
+            examples:
+              actualizarMesa:
+                summary: Cambia aforo y descripción, dejando la mesa libre
+                value:
+                  number: 5
+                  description: Mesa junto a la ventana (reformada)
+                  capacity: 6
+                  status: libre
+              reservarMesa:
+                summary: Marca la mesa como reservada al editar, con datos de reserva (D6)
+                value:
+                  number: 5
+                  description: Mesa junto a la ventana
+                  capacity: 4
+                  status: reservada
+                  reservedAt: '2026-11-24T20:30:00.000Z'
+                  reservedFor: 'Ana Ruiz · 600123456'
+      responses:
+        '200':
+          description: Mesa actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+              examples:
+                mesaActualizada:
+                  summary: Mesa 5 tras aumentar su aforo
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana (reformada)
+                    capacity: 6
+                    status: libre
+                    reservedAt: null
+                    reservedFor: null
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T12:30:00.000Z'
+        '400':
+          description: |
+            Validación de dominio fallida: número o capacidad inválidos, estado fuera del
+            enum, número duplicado en el restaurante o fecha de reserva inválida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                numeroInvalido:
+                  summary: number ausente o menor que 1
+                  value:
+                    error: InvalidTableNumberError
+                    message: 'Table number must be a positive integer'
+                capacidadInvalida:
+                  summary: capacity ausente o menor que 1
+                  value:
+                    error: InvalidTableCapacityError
+                    message: 'Table capacity must be a positive integer'
+                estadoInvalido:
+                  summary: status fuera del enum
+                  value:
+                    error: InvalidTableStatusError
+                    message: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+                numeroDuplicado:
+                  summary: Ya existe otra mesa con ese número en el restaurante
+                  value:
+                    error: DuplicatedTableNumberError
+                    message: Table number already exists in this restaurant
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      operationId: deleteTable
+      tags:
+        - Mesas (admin)
+      summary: Borrar una mesa
+      description: |
+        Borra la mesa. Requiere autenticación; solo el rol `admin`. Se permite borrar una mesa
+        con pedidos asociados: los pedidos conservan su `tableId`, que queda huérfano.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableId'
+      responses:
+        '204':
+          description: Mesa borrada (sin cuerpo de respuesta).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/tables/{tableId}/occupy:
+    post:
+      operationId: occupyTable
+      tags:
+        - Mesas (cliente)
+      summary: Ocupar una mesa
+      description: |
+        Marca la mesa como `ocupada` para un grupo de comensales. Requiere autenticación
+        (cualquier rol; la usa el cliente al pulsar «Continuar» tras elegir mesa). Solo
+        procede si la mesa está `libre` y `partySize` no supera su `capacity`; en cualquier
+        otro caso responde 400. La ocupación manual por parte del personal puede hacerse
+        igualmente con `PATCH .../status`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OccupyTableInput'
+            examples:
+              grupoDeCuatro:
+                summary: Grupo de 4 comensales en la mesa 5
+                value:
+                  partySize: 4
+      responses:
+        '200':
+          description: Mesa ocupada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+              examples:
+                mesaOcupada:
+                  summary: Mesa 5 tras ocuparla un grupo de 4
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana
+                    capacity: 4
+                    status: ocupada
+                    reservedAt: null
+                    reservedFor: null
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T13:15:00.000Z'
+        '400':
+          description: |
+            La mesa no está libre, el grupo supera el aforo de la mesa o `partySize` es
+            inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                mesaNoLibre:
+                  summary: La mesa no está en estado libre
+                  value:
+                    error: TableNotAvailableError
+                    message: Table is not available
+                aforoExcedido:
+                  summary: El grupo supera la capacidad de la mesa
+                  value:
+                    error: TableCapacityExceededError
+                    message: Party size exceeds table capacity
+                comensalesInvalidos:
+                  summary: partySize ausente o menor que 1
+                  value:
+                    error: InvalidPartySizeError
+                    message: 'Party size must be an integer greater than or equal to 1'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/tables/{tableId}/status:
+    patch:
+      operationId: changeTableStatus
+      tags:
+        - Mesas (empleados)
+      summary: Cambiar el estado de una mesa
+      description: |
+        Cambia el estado de la mesa. Requiere autenticación; roles permitidos: `admin`,
+        `manager` y `camarero` (**sin `cocinero`**, D2). Si el nuevo estado es `reservada` se
+        pueden enviar `reservedAt` y `reservedFor`; con cualquier otro estado ambos se limpian
+        (quedan `null`) aunque se envíen valores. No hay reglas de transición: se permite
+        cualquier cambio entre estados válidos (p. ej. liberar una mesa `ocupada` o `reservada`
+        de forma manual).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - $ref: '#/components/parameters/TableId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeTableStatusInput'
+            examples:
+              reservarMesa:
+                summary: Reservar la mesa con datos simples (D6)
+                value:
+                  status: reservada
+                  reservedAt: '2026-11-24T20:30:00.000Z'
+                  reservedFor: 'Ana Ruiz · 600123456'
+              liberarMesa:
+                summary: Liberación manual al marcharse el cliente
+                value:
+                  status: libre
+      responses:
+        '200':
+          description: Mesa con su nuevo estado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+              examples:
+                mesaReservada:
+                  summary: Mesa 5 tras reservarla para las 20:30
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana
+                    capacity: 4
+                    status: reservada
+                    reservedAt: '2026-11-24T20:30:00.000Z'
+                    reservedFor: 'Ana Ruiz · 600123456'
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T18:45:00.000Z'
+                mesaLiberada:
+                  summary: Mesa 5 liberada manualmente (datos de reserva limpiados)
+                  value:
+                    id: b4e6d8f0-6666-4c8e-9a1b-4e5f60718293
+                    restaurantId: rest-1
+                    number: 5
+                    description: Mesa junto a la ventana
+                    capacity: 4
+                    status: libre
+                    reservedAt: null
+                    reservedFor: null
+                    createdAt: '2026-11-20T10:00:00.000Z'
+                    updatedAt: '2026-11-24T22:10:00.000Z'
+        '400':
+          description: El estado solicitado no es válido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                estadoInvalido:
+                  summary: status fuera del enum
+                  value:
+                    error: InvalidTableStatusError
+                    message: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+                reservaInvalida:
+                  summary: reservedAt no es una fecha ISO 8601 válida (solo con status reservada)
+                  value:
+                    error: InvalidReservationDataError
+                    message: 'Invalid reservation data: reservedAt must be a valid ISO 8601 date-time'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token JWT devuelto por `POST /api/v1/auth/login` (credenciales de prueba tras el seed:
+        la contraseña es el propio email). Se envía en la cabecera
+        `Authorization: Bearer <token>`; el middleware `authenticate` lo valida y
+        `authorize` comprueba el rol del usuario.
+
+  parameters:
+    RestaurantId:
+      name: restaurantId
+      in: path
+      required: true
+      description: Identificador del restaurante al que pertenece la mesa (p. ej. `rest-1` del seed).
+      schema:
+        type: string
+      example: rest-1
+    TableId:
+      name: tableId
+      in: path
+      required: true
+      description: Identificador de la mesa. Las mesas nuevas usan UUID; el seed usa valores como `table-rest-1-5`. Coincide con el `tableId` que traen los pedidos.
+      schema:
+        type: string
+      example: table-rest-1-5
+    MinCapacity:
+      name: minCapacity
+      in: query
+      required: false
+      description: |
+        Aforo mínimo que debe tener la mesa (`capacity >= minCapacity`). Opcional, por defecto 1.
+        Debe ser un entero mayor o igual que 1; en caso contrario la API responde 400
+        `InvalidTableCapacityError`.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      example: 4
+    TableStatusFilter:
+      name: status
+      in: query
+      required: false
+      description: |
+        Filtra las mesas por estado (`libre`, `ocupada` o `reservada`). Sin filtro se devuelven
+        todos los estados. Se normaliza en minúsculas y sin espacios; un valor no válido
+        responde 400 `InvalidTableStatusError`.
+      schema:
+        $ref: '#/components/schemas/TableStatus'
+      example: libre
+
+  responses:
+    Unauthorized:
+      description: |
+        Token ausente, malformado o inválido (middleware `authenticate`). El cuerpo solo
+        incluye `error`, sin `message`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AuthErrorResponse'
+          examples:
+            sinToken:
+              summary: No se envía la cabecera Authorization
+              value:
+                error: 'Unauthorized: No token provided'
+            tokenMalformado:
+              summary: Cabecera Authorization malformada
+              value:
+                error: 'Unauthorized: Malformed token'
+            tokenInvalido:
+              summary: Token JWT inválido o expirado
+              value:
+                error: 'Unauthorized: Invalid token'
+    Forbidden:
+      description: |
+        El rol autenticado no está entre los permitidos por `authorize` (por ejemplo, un
+        `cocinero` en `PATCH /restaurants/{restaurantId}/tables/{tableId}/status`, que no
+        puede cambiar estados — D2). El cuerpo solo incluye `error`, sin `message`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AuthErrorResponse'
+          examples:
+            sinPermisos:
+              summary: Rol insuficiente
+              value:
+                error: 'Forbidden: Insufficient permissions'
+    NotFound:
+      description: No existe ninguna mesa con ese `tableId`; el `restaurantId` de la ruta no interviene en la búsqueda.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            mesaNoEncontrada:
+              summary: La mesa no existe
+              value:
+                error: TableNotFoundError
+                message: Table not found
+    InternalServerError:
+      description: Error inesperado no controlado por la API (`errorHandler`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InternalErrorResponse'
+          examples:
+            errorInterno:
+              summary: Error no controlado
+              value:
+                error: InternalServerError
+                message: Something went wrong
+
+  schemas:
+    TableStatus:
+      type: string
+      description: |
+        Estado de la mesa: `libre` (disponible), `ocupada` (con comensales) o `reservada`
+        (apartada para alguien). Se normaliza en minúsculas y sin espacios antes de validar.
+      enum:
+        - libre
+        - ocupada
+        - reservada
+      examples:
+        - libre
+
+    Table:
+      type: object
+      description: |
+        Mesa de un restaurante con su estado actual. La API siempre devuelve todos los campos;
+        `description`, `reservedAt` y `reservedFor` viajan como `null` cuando no tienen valor.
+      required:
+        - id
+        - restaurantId
+        - number
+        - description
+        - capacity
+        - status
+        - reservedAt
+        - reservedFor
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: Identificador único de la mesa; UUID en registros nuevos, o identificadores del seed como `table-rest-1-5`.
+        restaurantId:
+          type: string
+          description: Identificador del restaurante al que pertenece la mesa.
+          example: rest-1
+        number:
+          type: integer
+          minimum: 1
+          description: Número de mesa, único dentro del restaurante (`UNIQUE(restaurant_id, number)`).
+          example: 5
+        description:
+          type:
+            - string
+            - 'null'
+          description: Descripción o ubicación de la mesa (p. ej. «Mesa junto a la ventana»). Puede ser `null`.
+          example: Mesa junto a la ventana
+        capacity:
+          type: integer
+          minimum: 1
+          description: Aforo máximo de la mesa (número de comensales).
+          example: 4
+        status:
+          $ref: '#/components/schemas/TableStatus'
+        reservedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: |
+            Fecha y hora prevista de la reserva (ISO 8601). Solo tiene valor cuando
+            `status = 'reservada'`; en el resto de estados es `null` (D6).
+          example: '2026-11-24T20:30:00.000Z'
+        reservedFor:
+          type:
+            - string
+            - 'null'
+          description: |
+            Nombre o teléfono de quien reserva (texto libre, p. ej. «Ana Ruiz · 600123456»).
+            Solo tiene valor cuando `status = 'reservada'`; en el resto de estados es `null` (D6).
+          example: 'Ana Ruiz · 600123456'
+        createdAt:
+          type: string
+          format: date-time
+          description: Fecha de creación de la mesa.
+          example: '2026-11-20T10:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Fecha de la última actualización (cambia al editar o cambiar de estado).
+          example: '2026-11-20T10:00:00.000Z'
+
+    CreateTableInput:
+      type: object
+      description: |
+        Datos para crear una mesa. `number` y `capacity` son obligatorios; `description`,
+        `status`, `reservedAt` y `reservedFor` son opcionales. `reservedAt` / `reservedFor`
+        solo se guardan si `status = 'reservada'`; con cualquier otro estado se ignoran y la
+        mesa se crea con ambos a `null`.
+      required:
+        - number
+        - capacity
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          description: Número de mesa. Obligatorio; entero mayor o igual que 1 y no repetido en el restaurante.
+          example: 5
+        description:
+          type:
+            - string
+            - 'null'
+          description: Opcional. Descripción de la mesa; si no se envía se guarda `null`.
+          example: Mesa junto a la ventana
+        capacity:
+          type: integer
+          minimum: 1
+          description: Aforo máximo de la mesa. Obligatorio; entero mayor o igual que 1.
+          example: 4
+        status:
+          description: Estado inicial de la mesa. Opcional; por defecto `libre`. Se normaliza en minúsculas.
+          default: libre
+          allOf:
+            - $ref: '#/components/schemas/TableStatus'
+        reservedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Opcional. Fecha y hora prevista de la reserva; solo aplica si `status = 'reservada'`.
+          example: '2026-11-24T20:30:00.000Z'
+        reservedFor:
+          type:
+            - string
+            - 'null'
+          description: Opcional. Nombre o teléfono de quien reserva; solo aplica si `status = 'reservada'`.
+          example: 'Ana Ruiz · 600123456'
+
+    UpdateTableInput:
+      type: object
+      description: |
+        Datos para reemplazar una mesa (PUT completo, como el resto de la API). `number`,
+        `capacity` y `status` son obligatorios; `description`, `reservedAt` y `reservedFor`
+        son opcionales y se guardan como `null` si no se envían. `reservedAt` / `reservedFor`
+        solo persisten si `status = 'reservada'` (D6); con cualquier otro estado se limpian.
+      required:
+        - number
+        - capacity
+        - status
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          description: Número de mesa. Obligatorio; entero mayor o igual que 1 y no repetido en el restaurante.
+          example: 5
+        description:
+          type:
+            - string
+            - 'null'
+          description: Opcional. Descripción de la mesa; si no se envía se guarda `null`.
+          example: Mesa junto a la ventana (reformada)
+        capacity:
+          type: integer
+          minimum: 1
+          description: Aforo máximo de la mesa. Obligatorio; entero mayor o igual que 1.
+          example: 6
+        status:
+          description: Nuevo estado de la mesa. Obligatorio. Se normaliza en minúsculas.
+          allOf:
+            - $ref: '#/components/schemas/TableStatus'
+        reservedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Opcional. Fecha y hora prevista de la reserva; solo persiste si `status = 'reservada'`.
+          example: '2026-11-24T20:30:00.000Z'
+        reservedFor:
+          type:
+            - string
+            - 'null'
+          description: Opcional. Nombre o teléfono de quien reserva; solo persiste si `status = 'reservada'`.
+          example: 'Ana Ruiz · 600123456'
+
+    ChangeTableStatusInput:
+      type: object
+      description: |
+        Cambio de estado de una mesa. `status` es obligatorio. Si el nuevo estado es
+        `reservada` se pueden enviar `reservedAt` y `reservedFor`; con cualquier otro estado
+        ambos se limpian (quedan `null`) aunque se envíen valores (D6).
+      required:
+        - status
+      properties:
+        status:
+          description: Estado destino de la mesa. Obligatorio. Se normaliza en minúsculas.
+          allOf:
+            - $ref: '#/components/schemas/TableStatus'
+        reservedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Opcional. Fecha y hora prevista de la reserva; solo se guarda si `status = 'reservada'`.
+          example: '2026-11-24T20:30:00.000Z'
+        reservedFor:
+          type:
+            - string
+            - 'null'
+          description: Opcional. Nombre o teléfono de quien reserva; solo se guarda si `status = 'reservada'`.
+          example: 'Ana Ruiz · 600123456'
+
+    OccupyTableInput:
+      type: object
+      description: Datos para ocupar una mesa con un grupo de comensales.
+      required:
+        - partySize
+      properties:
+        partySize:
+          type: integer
+          minimum: 1
+          description: |
+            Número de comensales del grupo. Obligatorio; entero mayor o igual que 1 y no
+            superior a la `capacity` de la mesa.
+          example: 4
+
+    ErrorResponse:
+      type: object
+      description: |
+        Error de dominio (`AppError`) devuelto por el `errorHandler` de la API:
+        `{ "error": nombre de la clase de error, "message": descripción }`.
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Nombre de la clase de error (p. ej. `InvalidTableStatusError`).
+          example: InvalidTableStatusError
+        message:
+          type: string
+          description: Descripción del problema.
+          example: 'Estado inválido: pausada. Debe ser uno de: libre, ocupada, reservada'
+
+    AuthErrorResponse:
+      type: object
+      description: |
+        Error devuelto por los middlewares de autenticación/autorización (`authenticate` /
+        `authorize`): el cuerpo solo incluye `error`, sin `message`.
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Descripción del problema de autenticación o de permisos.
+          example: 'Unauthorized: Invalid token'
+
+    InternalErrorResponse:
+      type: object
+      description: Error no controlado devuelto por el `errorHandler` de la API.
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          const: InternalServerError
+          description: Identificador fijo del error interno.
+        message:
+          type: string
+          const: Something went wrong
+          description: Mensaje fijo del error interno.

@@ -1,0 +1,396 @@
+openapi: 3.1.0
+
+info:
+  title: API de empleados — Resttek
+  version: 1.0.0
+  description: |
+    Contrato OpenAPI de la consulta y creación de empleados y usuarios de Resttek.
+
+    ## Autenticación
+
+    Todos los endpoints requieren `Authorization: Bearer <token>` con un JWT obtenido en
+    `POST /api/v1/auth/login`. Además, todos exigen el rol `admin`; cualquier otro rol recibe
+    403. Los roles válidos del sistema son `admin`, `manager`, `camarero`, `cocinero` y
+    `cliente`.
+
+    ## Formato de errores
+
+    Los errores de dominio devuelven `{ "error": "<NombreDelError>", "message": "<descripción>" }`
+    con 400, salvo `EmployeeNotFoundError`, que devuelve 404. Los middlewares de acceso
+    devuelven `{ "error": "<descripción>" }` sin `message`: 401 por token ausente, malformado o
+    inválido y 403 por permisos insuficientes. Los errores no controlados devuelven
+    `500 { "error": "InternalServerError", "message": "Something went wrong" }`.
+
+    ## Consideraciones generales (comportamiento real del código)
+
+    - No existen endpoints para actualizar o borrar empleados. La creación permite al `admin`
+      crear también otros administradores o clientes; no se limita a personal de restaurante.
+    - `password` se cifra con `bcrypt`, pero no se valida su presencia ni su complejidad antes
+      de cifrarla; valores incompatibles pueden producir un 500.
+    - Nombres y apellidos se conservan tal cual después de comprobar que no estén vacíos. El
+      email se valida, pero no se recorta ni se pasa a minúsculas; el rol sí se normaliza con
+      `trim().toLowerCase()`.
+    - `restaurantId` es opcional y se guarda como `null` si se omite, sin inferirlo del usuario
+      autenticado ni exigirlo según el rol. No se comprueba en la lógica de negocio que el
+      restaurante exista: la restricción de clave foránea de SQLite puede provocar un 500.
+    - En el listado, `limit` y `offset` se procesan con `parseInt(...) || valorPorDefecto`.
+      No hay validación de rangos: valores negativos se envían a SQLite, `0` activa el valor por
+      defecto y una cadena no numérica también usa el valor por defecto. `role` es un filtro
+      exacto y no validado; un rol desconocido simplemente puede devolver una lista vacía.
+    - Los listados devuelven un array sin metadatos de paginación ni orden explícito. Consultar
+      empleados de un restaurante inexistente devuelve `[]`, no 404.
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: API de Resttek en local
+
+tags:
+  - name: Empleados
+    description: Administración y consulta de usuarios, restringida al rol `admin`.
+
+paths:
+  /employees:
+    post:
+      operationId: createEmployee
+      tags: [Empleados]
+      summary: Crear un empleado o usuario
+      description: |
+        Crea un usuario con el rol indicado. Requiere rol `admin`. `restaurantId` es opcional y
+        puede ser `null`; el código no impone una relación entre el rol y este campo.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEmployeeInput'
+            examples:
+              camarero:
+                summary: Nuevo camarero de rest-1
+                value:
+                  firstName: Elena
+                  lastName: Torres
+                  email: elena.torres@resttek.com
+                  password: clave-inicial
+                  role: camarero
+                  restaurantId: rest-1
+      responses:
+        '201':
+          description: Usuario creado; no se devuelve la contraseña ni su hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Employee'
+              examples:
+                creado:
+                  value:
+                    id: 6e2d94c8-0b60-4ed1-a6d2-f4a1ae9403c7
+                    firstName: Elena
+                    lastName: Torres
+                    email: elena.torres@resttek.com
+                    role: camarero
+                    restaurantId: rest-1
+        '400':
+          description: Nombre, apellidos, email o rol inválidos, o email duplicado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                nombreObligatorio:
+                  value: { error: FirstNameRequiredError, message: First name is required }
+                apellidosObligatorios:
+                  value: { error: LastNameRequiredError, message: Last name is required }
+                emailInvalido:
+                  value: { error: InvalidEmailError, message: Invalid email format }
+                rolInvalido:
+                  value: { error: InvalidRoleError, message: 'Invalid role: propietario. Must be one of: admin, manager, camarero, cocinero, cliente' }
+                emailDuplicado:
+                  value: { error: DuplicatedEmailError, message: Email is already in use }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listEmployees
+      tags: [Empleados]
+      summary: Listar usuarios
+      description: |
+        Devuelve usuarios con paginación simple y filtro exacto opcional por rol. Requiere rol
+        `admin`. Valores por defecto: `limit=10` y `offset=0`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/RoleFilter'
+      responses:
+        '200':
+          description: Página de usuarios, sin metadatos de paginación.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Employee'
+              examples:
+                camareros:
+                  value:
+                    - id: 1d050458-22ab-46a2-afdb-e4f10b78aa91
+                      firstName: María
+                      lastName: López
+                      email: camarero1@resttek.com
+                      role: camarero
+                      restaurantId: rest-1
+                    - id: 20d6965f-cd39-491f-80f0-f7eeaf04ee62
+                      firstName: Pedro
+                      lastName: Martínez
+                      email: camarero2@resttek.com
+                      role: camarero
+                      restaurantId: rest-1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /employees/{id}:
+    get:
+      operationId: getEmployee
+      tags: [Empleados]
+      summary: Obtener un usuario
+      description: Devuelve un usuario por identificador. Requiere rol `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EmployeeId'
+      responses:
+        '200':
+          description: Usuario encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Employee'
+              examples:
+                camarero:
+                  value:
+                    id: 1d050458-22ab-46a2-afdb-e4f10b78aa91
+                    firstName: María
+                    lastName: López
+                    email: camarero1@resttek.com
+                    role: camarero
+                    restaurantId: rest-1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /restaurants/{restaurantId}/employees:
+    get:
+      operationId: listEmployeesByRestaurant
+      tags: [Empleados]
+      summary: Listar usuarios de un restaurante
+      description: |
+        Devuelve todos los usuarios cuyo `restaurantId` coincide con el parámetro, sin
+        paginación. Requiere rol `admin`. Un restaurante inexistente produce una lista vacía.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Usuarios asociados al restaurante.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Employee'
+              examples:
+                personalRest1:
+                  value:
+                    - id: 665aa150-e80c-488a-976d-746bf9f19f31
+                      firstName: Juan
+                      lastName: García
+                      email: cocinero1@resttek.com
+                      role: cocinero
+                      restaurantId: rest-1
+                    - id: 1d050458-22ab-46a2-afdb-e4f10b78aa91
+                      firstName: María
+                      lastName: López
+                      email: camarero1@resttek.com
+                      role: camarero
+                      restaurantId: rest-1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtenido en `POST /api/v1/auth/login`.
+
+  parameters:
+    EmployeeId:
+      name: id
+      in: path
+      required: true
+      description: Identificador UUID del usuario.
+      schema: { type: string, format: uuid }
+      example: 1d050458-22ab-46a2-afdb-e4f10b78aa91
+    RestaurantId:
+      name: restaurantId
+      in: path
+      required: true
+      description: Identificador del restaurante; no se comprueba su existencia en el listado.
+      schema: { type: string }
+      example: rest-1
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Número máximo de filas enviado a SQLite; por defecto 10. No se valida el rango.
+      schema: { type: integer, default: 10 }
+      example: 20
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: Desplazamiento de la consulta; por defecto 0. No se valida el rango.
+      schema: { type: integer, default: 0 }
+      example: 0
+    RoleFilter:
+      name: role
+      in: query
+      required: false
+      description: Filtro exacto por rol. Los roles del sistema son admin, manager, camarero, cocinero y cliente; no se normaliza ni valida.
+      schema: { type: string }
+      example: camarero
+
+  responses:
+    Unauthorized:
+      description: Token ausente, malformado o inválido; el cuerpo solo contiene `error`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinToken:
+              value: { error: 'Unauthorized: No token provided' }
+            tokenMalformado:
+              value: { error: 'Unauthorized: Malformed token' }
+            tokenInvalido:
+              value: { error: 'Unauthorized: Invalid token' }
+    Forbidden:
+      description: El token es válido pero el rol no es `admin`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthErrorResponse' }
+          examples:
+            sinPermisos:
+              value: { error: 'Forbidden: Insufficient permissions' }
+    NotFound:
+      description: No existe un usuario con ese identificador.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            noEncontrado:
+              value: { error: EmployeeNotFoundError, message: Employee not found }
+    InternalServerError:
+      description: Error no controlado, incluidos fallos de base de datos o de cifrado.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+          examples:
+            errorInterno:
+              value: { error: InternalServerError, message: Something went wrong }
+
+  schemas:
+    Employee:
+      type: object
+      required: [id, firstName, lastName, email, role, restaurantId]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 1d050458-22ab-46a2-afdb-e4f10b78aa91
+        firstName:
+          type: string
+          example: María
+        lastName:
+          type: string
+          example: López
+        email:
+          type: string
+          format: email
+          example: camarero1@resttek.com
+        role:
+          type: string
+          enum: [admin, manager, camarero, cocinero, cliente]
+          example: camarero
+        restaurantId:
+          type: [string, 'null']
+          example: rest-1
+
+    CreateEmployeeInput:
+      type: object
+      required: [firstName, lastName, email, password, role]
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          example: Elena
+        lastName:
+          type: string
+          minLength: 1
+          example: Torres
+        email:
+          type: string
+          format: email
+          example: elena.torres@resttek.com
+        password:
+          type: string
+          format: password
+          description: Contraseña en texto plano, sin política de complejidad implementada.
+          example: clave-inicial
+        role:
+          type: string
+          enum: [admin, manager, camarero, cocinero, cliente]
+          description: Se normaliza a minúsculas y sin espacios exteriores.
+          example: camarero
+        restaurantId:
+          type: [string, 'null']
+          description: Restaurante asociado; por defecto `null`. Debe existir para que SQLite acepte la inserción.
+          example: rest-1
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: InvalidRoleError }
+        message: { type: string, example: Invalid role }
+    AuthErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: 'Unauthorized: Invalid token' }
+    InternalErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, const: InternalServerError }
+        message: { type: string, const: Something went wrong }

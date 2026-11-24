@@ -11,6 +11,7 @@ erDiagram
     restaurants ||--o{ employees : "tiene"
     restaurants ||--o{ ingredients : "tiene"
     restaurants ||--o{ dishes : "tiene"
+    restaurants ||--o{ tables : "tiene"
     restaurants ||--o{ orders : "tiene"
     dishes ||--o{ dish_ingredients : "contiene"
     ingredients ||--o{ dish_ingredients : "usado en"
@@ -83,6 +84,19 @@ erDiagram
         INTEGER quantity
         TEXT notes
         TEXT status
+    }
+
+    tables {
+        TEXT id PK
+        INTEGER number
+        TEXT description
+        INTEGER capacity
+        TEXT status
+        TEXT reserved_at
+        TEXT reserved_for
+        TEXT restaurant_id FK
+        TEXT created_at
+        TEXT updated_at
     }
 ```
 
@@ -190,7 +204,7 @@ Pedidos de los clientes.
 | --- | --- | --- | --- |
 | `id` | TEXT | No | UUID, clave primaria |
 | `restaurant_id` | TEXT | No | FK → `restaurants.id` |
-| `table_id` | TEXT | Sí | Identificador de mesa (opcional) |
+| `table_id` | TEXT | Sí | ID de la mesa (`tables.id`) donde se sirvió el pedido. **Sin FK**: si se borra la mesa, el pedido conserva un `table_id` huérfano |
 | `client_id` | TEXT | Sí | ID del cliente (opcional) |
 | `created_at` | TEXT | No | Fecha de creación |
 
@@ -215,6 +229,31 @@ Líneas de pedido. Cada ítem es un plato con cantidad y estado.
 
 ---
 
+### `tables`
+
+Mesas de cada restaurante, con su estado operativo y sus datos de reserva.
+
+| Columna | Tipo | Nullable | Descripción |
+| --- | --- | --- | --- |
+| `id` | TEXT | No | UUID, clave primaria |
+| `number` | INTEGER | No | Número de mesa, único dentro del restaurante |
+| `description` | TEXT | Sí | Descripción o ubicación (ej: "Mesa junto a la ventana") |
+| `capacity` | INTEGER | No | Aforo máximo (número de comensales) |
+| `status` | TEXT | No | Estado: libre, ocupada, reservada (default: `libre`) |
+| `reserved_at` | TEXT | Sí | Fecha/hora prevista de la reserva (ISO 8601); solo informado con `status = 'reservada'` |
+| `reserved_for` | TEXT | Sí | Nombre o teléfono de quien reserva; solo informado con `status = 'reservada'` |
+| `restaurant_id` | TEXT | No | FK → `restaurants.id` |
+| `created_at` | TEXT | No | Fecha de creación |
+| `updated_at` | TEXT | No | Fecha de última actualización |
+
+**Restricciones:**
+
+- `UNIQUE(restaurant_id, number)`: el número de mesa es único dentro de cada restaurante.
+- `reserved_at` / `reserved_for` se limpian (vuelven a `null`) al pasar de `reservada` a cualquier otro estado.
+- No hay FK desde `orders.table_id`: borrar una mesa deja los pedidos con `table_id` huérfano, y crear un pedido no valida que la mesa exista.
+
+---
+
 ## Relaciones
 
 | Relación | Tipo | Descripción |
@@ -222,16 +261,18 @@ Líneas de pedido. Cada ítem es un plato con cantidad y estado.
 | Restaurant → Employees | 1:N | Un restaurante tiene muchos empleados |
 | Restaurant → Ingredients | 1:N | Un restaurante tiene muchos ingredientes |
 | Restaurant → Dishes | 1:N | Un restaurante tiene muchos platos |
+| Restaurant → Tables | 1:N | Un restaurante tiene muchas mesas (número único por restaurante) |
 | Restaurant → Orders | 1:N | Un restaurante tiene muchos pedidos |
 | Dish ↔ Ingredient | N:M | Un plato usa varios ingredientes (via `dish_ingredients`) |
 | Order → OrderItems | 1:N | Un pedido tiene varios ítems |
 | Dish → OrderItems | 1:N | Un plato puede estar en varios ítems de pedido |
+| Table → Orders | 1:N (lógica, sin FK) | Los pedidos guardan `table_id`; la relación no está respaldada por FK en la BD |
 
 ---
 
 ## Notas Técnicas
 
-- **IDs**: Todos son UUID v4 generados con `crypto.randomUUID()`. Excepción: el script de seed usa los identificadores fijos `rest-1` y `rest-2` para los restaurantes de prueba.
+- **IDs**: Todos son UUID v4 generados con `crypto.randomUUID()`. Excepción: el script de seed usa los identificadores fijos `rest-1` y `rest-2` para los restaurantes de prueba y `table-rest-1-N` / `table-rest-2-N` para sus mesas (así el pedido de ejemplo puede enlazarse a `table-rest-1-5`).
 - **Fechas**: Almacenadas como TEXT en formato ISO 8601 (`new Date().toISOString()`).
 - **Booleanos**: SQLite no tiene tipo BOOLEAN; se usa INTEGER (0 = false, 1 = true).
 - **Nomenclatura**: las columnas son `snake_case` y las propiedades TypeScript `camelCase`. La conversión se hace con alias en el propio SQL (`owner_first_name as ownerFirstName`).
