@@ -12,7 +12,7 @@ import { Restaurant } from '../../core/models/restaurant.model'
     <div class="container">
       <div class="page-header">
         <h1>Restaurantes</h1>
-        <p>Selecciona un restaurante para ver su carta</p>
+        <p>Selecciona un restaurante para elegir mesa y pedir</p>
       </div>
 
       @if (loading()) {
@@ -38,6 +38,7 @@ import { Restaurant } from '../../core/models/restaurant.model'
                 <h3>{{ restaurant.name }}</h3>
                 <p class="address">{{ restaurant.address }}</p>
                 <p class="phone">{{ restaurant.phone }}</p>
+                <span class="card-cta">Elegir mesa →</span>
               </div>
             </a>
           }
@@ -94,6 +95,13 @@ import { Restaurant } from '../../core/models/restaurant.model'
       color: var(--text-secondary);
       font-size: 13px;
       margin-top: 4px;
+    }
+    .restaurant-info .card-cta {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--green-light);
     }
   `]
 })
