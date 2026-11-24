@@ -29,6 +29,18 @@ const seed = async () => {
             console.log('Admin already exists.')
         }
 
+        await dbConfig.run(`
+            INSERT OR IGNORE INTO restaurants (id, name, address, email, phone, owner_first_name, owner_last_name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, ['rest-1', 'Restaurante El Gourmet', 'Calle Mayor 10, Madrid', 'info@gourmet.com', '912345678', 'Carlos', 'García', new Date().toISOString(), new Date().toISOString()])
+
+        await dbConfig.run(`
+            INSERT OR IGNORE INTO restaurants (id, name, address, email, phone, owner_first_name, owner_last_name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, ['rest-2', 'Pizzería Napoli', 'Avenida del Sol 25, Barcelona', 'info@napoli.com', '934567890', 'Marco', 'Rossi', new Date().toISOString(), new Date().toISOString()])
+
+        console.log('Restaurants created.')
+
         const employees = [
             { firstName: 'Juan', lastName: 'García', email: 'cocinero1@resttek.com', role: 'cocinero', restaurantId: 'rest-1' },
             { firstName: 'María', lastName: 'López', email: 'camarero1@resttek.com', role: 'camarero', restaurantId: 'rest-1' },
@@ -59,17 +71,43 @@ const seed = async () => {
             }
         }
 
-        await dbConfig.run(`
-            INSERT OR IGNORE INTO restaurants (id, name, address, email, phone, owner_first_name, owner_last_name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, ['rest-1', 'Restaurante El Gourmet', 'Calle Mayor 10, Madrid', 'info@gourmet.com', '912345678', 'Carlos', 'García', new Date().toISOString(), new Date().toISOString()])
+        const reservationDate = new Date()
+        reservationDate.setDate(reservationDate.getDate() + 1)
+        reservationDate.setHours(20, 30, 0, 0)
 
-        await dbConfig.run(`
-            INSERT OR IGNORE INTO restaurants (id, name, address, email, phone, owner_first_name, owner_last_name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, ['rest-2', 'Pizzería Napoli', 'Avenida del Sol 25, Barcelona', 'info@napoli.com', '934567890', 'Marco', 'Rossi', new Date().toISOString(), new Date().toISOString()])
+        const tablesRest1: Array<{ id: string, number: number, description: string, capacity: number, status: string, reservedAt: string | null, reservedFor: string | null }> = [
+            { id: 'table-rest-1-1', number: 1, description: 'Mesa cerca de la barra', capacity: 4, status: 'libre', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-2', number: 2, description: 'Mesa en la terraza', capacity: 4, status: 'libre', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-3', number: 3, description: 'Mesa del rincón', capacity: 2, status: 'libre', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-4', number: 4, description: 'Mesa junto a la puerta', capacity: 4, status: 'libre', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-5', number: 5, description: 'Mesa junto a la ventana', capacity: 4, status: 'ocupada', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-6', number: 6, description: 'Mesa del salón principal', capacity: 6, status: 'libre', reservedAt: null, reservedFor: null },
+            { id: 'table-rest-1-7', number: 7, description: 'Mesa pequeña del interior', capacity: 2, status: 'reservada', reservedAt: reservationDate.toISOString(), reservedFor: 'Ana Ruiz · 600123456' },
+            { id: 'table-rest-1-8', number: 8, description: 'Mesa grande del fondo', capacity: 6, status: 'libre', reservedAt: null, reservedFor: null }
+        ]
 
-        console.log('Restaurants created.')
+        for (const table of tablesRest1) {
+            await dbConfig.run(`
+                INSERT OR IGNORE INTO tables (id, number, description, capacity, status, reserved_at, reserved_for, restaurant_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [table.id, table.number, table.description, table.capacity, table.status, table.reservedAt, table.reservedFor, 'rest-1', new Date().toISOString(), new Date().toISOString()])
+        }
+
+        const tablesRest2 = [
+            { id: 'table-rest-2-1', number: 1, description: 'Mesa junto al horno', capacity: 2 },
+            { id: 'table-rest-2-2', number: 2, description: 'Mesa central', capacity: 4 },
+            { id: 'table-rest-2-3', number: 3, description: 'Mesa del jardín', capacity: 4 },
+            { id: 'table-rest-2-4', number: 4, description: 'Mesa familiar', capacity: 6 }
+        ]
+
+        for (const table of tablesRest2) {
+            await dbConfig.run(`
+                INSERT OR IGNORE INTO tables (id, number, description, capacity, status, reserved_at, reserved_for, restaurant_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [table.id, table.number, table.description, table.capacity, 'libre', null, null, 'rest-2', new Date().toISOString(), new Date().toISOString()])
+        }
+
+        console.log('Tables created.')
 
         const ingredientsRest1 = [
             { id: randomUUID(), name: 'Tomate', unit: 'kg' },
@@ -162,7 +200,7 @@ const seed = async () => {
         await dbConfig.run(`
             INSERT OR IGNORE INTO orders (id, restaurant_id, table_id, client_id, created_at)
             VALUES (?, ?, ?, ?, ?)
-        `, [order1Id, 'rest-1', '5', null, new Date().toISOString()])
+        `, [order1Id, 'rest-1', 'table-rest-1-5', null, new Date().toISOString()])
 
         for (let i = 0; i < 2; i++) {
             await dbConfig.run(`
