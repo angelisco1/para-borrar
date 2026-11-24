@@ -192,3 +192,27 @@ export class DuplicatedTableNumberError extends AppError {
   }
 }
 
+export class TableNotAvailableError extends AppError {
+  constructor() {
+    super('Table is not available')
+  }
+}
+
+export class TableCapacityExceededError extends AppError {
+  constructor() {
+    super('Party size exceeds table capacity')
+  }
+}
+
+export class InvalidPartySizeError extends AppError {
+  constructor() {
+    super('Party size must be an integer greater than or equal to 1')
+  }
+}
+
+export class InvalidReservationDataError extends AppError {
+  constructor() {
+    super('Invalid reservation data: reservedAt must be a valid ISO 8601 date-time')
+  }
+}
+

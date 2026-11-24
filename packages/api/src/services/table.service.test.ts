@@ -5,7 +5,12 @@ import {
     TableNotFoundError,
     InvalidTableNumberError,
     InvalidTableCapacityError,
-    DuplicatedTableNumberError
+    InvalidTableStatusError,
+    DuplicatedTableNumberError,
+    TableNotAvailableError,
+    TableCapacityExceededError,
+    InvalidPartySizeError,
+    InvalidReservationDataError
 } from '@errors/DomainErrors.js'
 
 describe('TableService', () => {
@@ -153,6 +158,175 @@ describe('TableService', () => {
         it('should throw TableNotFoundError for a non-existent id', async () => {
             await expect(service.delete('non-existent'))
                 .rejects.toThrow(TableNotFoundError)
+        })
+    })
+
+    describe('listAvailable', () => {
+        it('should list only free tables with enough capacity', async () => {
+            await service.create({ ...validDTO, number: 1, capacity: 2 })
+            await service.create({ ...validDTO, number: 2, capacity: 4 })
+            await service.create({ ...validDTO, number: 3, capacity: 4, status: 'ocupada' })
+            await service.create({ ...validDTO, number: 4, capacity: 8, status: 'reservada' })
+
+            const results = await service.listAvailable('rest-1', 3)
+
+            expect(results).toHaveLength(1)
+            expect(results[0]?.number).toBe(2)
+        })
+
+        it('should list every free table when minCapacity is 1', async () => {
+            await service.create({ ...validDTO, number: 1, capacity: 2 })
+            await service.create({ ...validDTO, number: 2, capacity: 4 })
+            await service.create({ ...validDTO, number: 3, capacity: 4, status: 'ocupada' })
+
+            const results = await service.listAvailable('rest-1', 1)
+
+            expect(results).toHaveLength(2)
+        })
+
+        it('should throw InvalidTableCapacityError for a non-positive minCapacity', async () => {
+            await expect(service.listAvailable('rest-1', 0))
+                .rejects.toThrow(InvalidTableCapacityError)
+        })
+    })
+
+    describe('occupy', () => {
+        it('should mark a free table as ocupada', async () => {
+            const created = await service.create(validDTO)
+
+            const result = await service.occupy(created.id, 4)
+
+            expect(result.status).toBe('ocupada')
+            const saved = await repo.findById(created.id)
+            expect(saved?.status).toBe('ocupada')
+        })
+
+        it('should throw TableNotFoundError for a non-existent table', async () => {
+            await expect(service.occupy('non-existent', 2))
+                .rejects.toThrow(TableNotFoundError)
+        })
+
+        it('should throw TableNotAvailableError when the table is not free', async () => {
+            const created = await service.create({ ...validDTO, status: 'ocupada' })
+
+            await expect(service.occupy(created.id, 2))
+                .rejects.toThrow(TableNotAvailableError)
+        })
+
+        it('should throw TableCapacityExceededError when partySize exceeds capacity', async () => {
+            const created = await service.create(validDTO)
+
+            await expect(service.occupy(created.id, 5))
+                .rejects.toThrow(TableCapacityExceededError)
+        })
+
+        it('should throw InvalidPartySizeError for a non-positive partySize', async () => {
+            const created = await service.create(validDTO)
+
+            await expect(service.occupy(created.id, 0))
+                .rejects.toThrow(InvalidPartySizeError)
+        })
+    })
+
+    describe('changeStatus', () => {
+        it('should normalize and change the status of a table', async () => {
+            const created = await service.create(validDTO)
+
+            const result = await service.changeStatus(created.id, { status: ' OCUPADA ' })
+
+            expect(result.status).toBe('ocupada')
+        })
+
+        it('should throw InvalidTableStatusError for an unknown status', async () => {
+            const created = await service.create(validDTO)
+
+            await expect(service.changeStatus(created.id, { status: 'pausada' }))
+                .rejects.toThrow(InvalidTableStatusError)
+        })
+
+        it('should throw TableNotFoundError for a non-existent table', async () => {
+            await expect(service.changeStatus('non-existent', { status: 'libre' }))
+                .rejects.toThrow(TableNotFoundError)
+        })
+
+        it('should store reservation data when the status is reservada', async () => {
+            const created = await service.create(validDTO)
+
+            const result = await service.changeStatus(created.id, {
+                status: 'reservada',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            })
+
+            expect(result.status).toBe('reservada')
+            expect(result.reservedAt).toBe('2026-11-24T20:30:00.000Z')
+            expect(result.reservedFor).toBe('Ana Ruiz · 600123456')
+        })
+
+        it('should throw InvalidReservationDataError for an invalid reservedAt', async () => {
+            const created = await service.create(validDTO)
+
+            await expect(service.changeStatus(created.id, {
+                status: 'reservada',
+                reservedAt: '24-11-2026 20:30'
+            }))
+                .rejects.toThrow(InvalidReservationDataError)
+        })
+
+        it('should clear reservation data when moving away from reservada', async () => {
+            const created = await service.create(validDTO)
+            await service.changeStatus(created.id, {
+                status: 'reservada',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            })
+
+            const result = await service.changeStatus(created.id, { status: 'libre' })
+
+            expect(result.status).toBe('libre')
+            expect(result.reservedAt).toBeNull()
+            expect(result.reservedFor).toBeNull()
+        })
+    })
+
+    describe('reservation data on create and update (D6)', () => {
+        it('should keep reservation data when creating a table as reservada', async () => {
+            const result = await service.create({
+                ...validDTO,
+                status: 'reservada',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            })
+
+            expect(result.reservedAt).toBe('2026-11-24T20:30:00.000Z')
+            expect(result.reservedFor).toBe('Ana Ruiz · 600123456')
+        })
+
+        it('should ignore reservation data when the status is not reservada', async () => {
+            const result = await service.create({
+                ...validDTO,
+                status: 'libre',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            })
+
+            expect(result.status).toBe('libre')
+            expect(result.reservedAt).toBeNull()
+            expect(result.reservedFor).toBeNull()
+        })
+
+        it('should clear reservation data when updating a table to a non-reservada status', async () => {
+            const created = await service.create({
+                ...validDTO,
+                status: 'reservada',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            })
+
+            const result = await service.update(created.id, { number: 5, description: null, capacity: 4, status: 'libre' })
+
+            expect(result.reservedAt).toBeNull()
+            expect(result.reservedFor).toBeNull()
         })
     })
 })
