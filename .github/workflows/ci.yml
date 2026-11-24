@@ -77,35 +77,36 @@ jobs:
         run: npx --yes @redocly/cli@2.82.0 lint "docs/api/*.openapi.yml" --format=github-actions
 
   # ---------------------------------------------------------------------------
-  # Revisión con Claude: ¿los cambios de la PR siguen siendo coherentes con la
-  # documentación del proyecto (CLAUDE.md + docs/)? Si no, lo deja como
+  # Revisión con opencode: ¿los cambios de la PR siguen siendo coherentes con la
+  # documentación del proyecto (AGENTS.md + docs/)? Si no, lo deja como
   # comentario en la PR para que alguien lo revise. No bloquea el merge.
   # ---------------------------------------------------------------------------
   docs-consistency:
-    name: Coherencia con la documentación (Claude)
+    name: Coherencia con la documentación (opencode)
     runs-on: ubuntu-latest
     # Los secretos no están disponibles en PRs desde forks, y los borradores no se revisan.
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
+      id-token: write # intercambio OIDC por el token de la GitHub App de opencode
       contents: read
       pull-requests: write # publicar/actualizar el comentario
-      id-token: write # requerido por claude-code-action
     env:
       REPORT_FILE: docs-consistency-report.md
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # necesario para calcular el diff contra la rama base
+          persist-credentials: false
 
-      - name: Revisar coherencia con Claude
-        uses: anthropics/claude-code-action@v1
+      - name: Revisar coherencia con opencode
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ github.token }} # para leer el contexto del PR con gh si hace falta
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Claude solo puede leer el repo y escribir el informe; el comentario lo publica el paso siguiente.
-          claude_args: >-
-            --allowedTools "Read,Glob,Grep,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)"
+          model: opencode/deepseek-v4.1-flash-free
           prompt: |
             Eres un revisor de coherencia entre código y documentación del proyecto Resttek.
 
@@ -115,14 +116,14 @@ jobs:
             ## Qué hacer
             1. Obtén los cambios de la PR con `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD`
                (usa también `git log` y `git show` si necesitas contexto).
-            2. Lee la documentación del proyecto: `CLAUDE.md`, `README.md`, todo `docs/`
+            2. Lee la documentación del proyecto: `AGENTS.md`, `README.md`, todo `docs/`
                (`docs/arquitectura/`, `docs/dominio/`, `docs/api/*.openapi.yml` si existe) y `scripts/README.md` si aplica.
             3. Comprueba si los cambios siguen siendo consistentes con esa documentación. Ejemplos de incoherencia:
                - Endpoints, rutas, roles, códigos de estado o formatos de error que cambian y no coinciden con los OpenAPI.
                - Cambios en el modelo de datos (tablas, columnas, relaciones) que contradicen `docs/dominio/modelo-datos.md`.
                - Cambios que rompen la arquitectura descrita (estilo hexagonal en `contexts/employee/` vs. por capas en el
                  resto de la API, estructura feature-based de los frontends, dependencias entre paquetes, etc.).
-               - Comandos, scripts, puertos o credenciales de prueba que cambian y dejan desactualizados CLAUDE.md o los README.
+               - Comandos, scripts, puertos o credenciales de prueba que cambian y dejan desactualizados AGENTS.md o los README.
                - Términos de dominio que contradicen `docs/dominio/glosario.md`.
                También señala documentación que ha quedado obsoleta por el cambio, aunque la PR no la toque.
             4. Sé riguroso y concreto: solo reporta incoherencias reales que puedas demostrar citando fichero y, si puedes,
@@ -146,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MARKER:'<!-- resttek-docs-consistency -->'
+          MARKER: '<!-- resttek-docs-consistency -->'
         run: |
           set -euo pipefail
 
@@ -161,7 +162,7 @@ jobs:
                 echo "$MARKER"
                 echo "### ⚠️ Posibles incoherencias con la documentación"
                 echo
-                echo "Claude ha revisado los cambios de esta PR contra la documentación del proyecto y ha encontrado lo siguiente. **Requiere revisión humana.**"
+                echo "opencode ha revisado los cambios de esta PR contra la documentación del proyecto y ha encontrado lo siguiente. **Requiere revisión humana.**"
                 echo
                 tail -n +2 "$REPORT_FILE"
                 echo
@@ -178,7 +179,7 @@ jobs:
                 echo "$MARKER"
                 echo "### ✅ Coherencia con la documentación"
                 echo
-                echo "Tras el último commit, Claude no ha encontrado incoherencias con la documentación (aviso anterior resuelto)."
+                echo "Tras el último commit, opencode no ha encontrado incoherencias con la documentación (aviso anterior resuelto)."
                 echo
                 tail -n +2 "$REPORT_FILE"
                 echo
@@ -186,7 +187,7 @@ jobs:
               } > comment.md
               ;;
             *)
-              echo "::warning::El informe de Claude no empieza por 'RESULTADO: ...'; no se publica comentario."
+              echo "::warning::El informe de opencode no empieza por 'RESULTADO: ...'; no se publica comentario."
               exit 0
               ;;
           esac

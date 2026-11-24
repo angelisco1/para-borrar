@@ -1,0 +1,49 @@
+name: opencode code review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # Opcional: revisar solo ciertos ficheros
+    # paths:
+    #   - "packages/**/*.ts"
+    #   - "docs/**"
+
+jobs:
+  review:
+    # Opcional: filtrar por autor del PR
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
+    # Los PRs desde forks no reciben secretos ni token de escritura.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # intercambio OIDC por el token de la GitHub App de opencode
+      contents: read
+      pull-requests: write # publicar la revisión
+      issues: write # los comentarios de PR se gestionan con la API de issues
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run opencode code review
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4.1-flash-free
+          prompt: |
+            Revisa el pull request #${{ github.event.pull_request.number }} de este repositorio y publica
+            la revisión como comentario. Céntrate en:
+            - Posibles bugs y casos límite no cubiertos.
+            - Coherencia con la arquitectura descrita en AGENTS.md y en `docs/`.
+            - Falta de tests para la lógica nueva o modificada.
+            - Problemas de seguridad (autenticación, autorización, datos expuestos).
+            - Cambios en la API que no actualicen `docs/api/*.openapi.yml`.
+
+            Sé concreto: cita fichero y línea. No comentes preferencias de estilo ni reescribas el
+            código salvo que se pida explícitamente; esta ejecución es solo de revisión.
