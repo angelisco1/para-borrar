@@ -1,10 +1,11 @@
 import { Component, inject, OnInit, signal, computed } from '@angular/core'
-import { ActivatedRoute, RouterLink } from '@angular/router'
+import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import { DecimalPipe } from '@angular/common'
 import { LucideAngularModule } from 'lucide-angular'
 import { DishService } from '../../core/services/dish.service'
 import { RestaurantService } from '../../core/services/restaurant.service'
 import { CartStore, Dish } from '../../core/store/cart.store'
+import { DiningSessionStore } from '../../core/store/dining-session.store'
 import { Restaurant } from '../../core/models/restaurant.model'
 
 @Component({
@@ -17,6 +18,12 @@ import { Restaurant } from '../../core/models/restaurant.model'
         <div>
           <a routerLink="/restaurants" class="back-link">← Volver a restaurantes</a>
           <h1>{{ restaurant()?.name || 'Cargando...' }}</h1>
+          @if (diningSession.table(); as table) {
+            <p class="table-session">
+              Mesa {{ table.number }} · {{ diningSession.partySize() }}
+              {{ diningSession.partySize() === 1 ? 'comensal' : 'comensales' }}
+            </p>
+          }
         </div>
       </div>
 
@@ -93,6 +100,12 @@ import { Restaurant } from '../../core/models/restaurant.model'
       color: var(--text-muted);
       margin-bottom: 8px;
       display: inline-block;
+    }
+    .table-session {
+      margin-top: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--green-light);
     }
     .menu-layout {
       display: grid;
@@ -209,9 +222,11 @@ import { Restaurant } from '../../core/models/restaurant.model'
 })
 export class RestaurantMenuComponent implements OnInit {
   private readonly route = inject(ActivatedRoute)
+  private readonly router = inject(Router)
   private readonly dishService = inject(DishService)
   private readonly restaurantService = inject(RestaurantService)
   readonly cartStore = inject(CartStore)
+  readonly diningSession = inject(DiningSessionStore)
 
   readonly restaurant = signal<Restaurant | null>(null)
   readonly dishes = signal<Dish[]>([])
@@ -234,6 +249,11 @@ export class RestaurantMenuComponent implements OnInit {
 
   ngOnInit(): void {
     const restaurantId = this.route.snapshot.paramMap.get('id')!
+    const table = this.diningSession.table()
+    if (!table || table.restaurantId !== restaurantId) {
+      this.router.navigate(['/restaurants', restaurantId])
+      return
+    }
     this.loadData(restaurantId)
   }
 
