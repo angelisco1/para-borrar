@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { TableController } from './table.controller.js'
 import type { TableService } from '@services/table.service.js'
 import type { Table } from '@models/table.model.js'
-import { TableNotFoundError } from '@errors/DomainErrors.js'
+import { TableNotFoundError, TableNotAvailableError } from '@errors/DomainErrors.js'
 
 const baseTable: Table = {
     id: 't1',
@@ -109,6 +109,87 @@ describe('TableController (CRUD)', () => {
         await controller.getById(reqFor({ tableId: 't1' }), res, next)
 
         expect(next).toHaveBeenCalledWith(expect.any(TableNotFoundError))
+        expect(res.status).not.toHaveBeenCalled()
+        expect(res.json).not.toHaveBeenCalled()
+    })
+})
+
+describe('TableController (estado, ocupación y disponibilidad)', () => {
+    let controller: TableController
+    let service: Record<string, any>
+    let res: any
+    let next: any
+
+    const reqFor = (params: Record<string, string> = {}, body: Record<string, unknown> = {}, query: Record<string, unknown> = {}): any => ({
+        params: { restaurantId: 'rest-1', ...params },
+        body,
+        query
+    })
+
+    beforeEach(() => {
+        service = {
+            changeStatus: vi.fn().mockResolvedValue({
+                ...baseTable,
+                status: 'reservada',
+                reservedAt: '2026-11-24T20:30:00.000Z',
+                reservedFor: 'Ana Ruiz · 600123456'
+            }),
+            occupy: vi.fn().mockResolvedValue({ ...baseTable, status: 'ocupada' }),
+            listAvailable: vi.fn().mockResolvedValue([baseTable])
+        }
+        controller = new TableController(service as unknown as TableService)
+        res = buildRes()
+        next = vi.fn()
+    })
+
+    it('should respond 200 with the table after changing its status', async () => {
+        await controller.changeStatus(
+            reqFor({ tableId: 't1' }, { status: 'reservada', reservedAt: '2026-11-24T20:30:00.000Z', reservedFor: 'Ana Ruiz · 600123456' }),
+            res,
+            next
+        )
+
+        expect(service.changeStatus).toHaveBeenCalledWith('t1', {
+            status: 'reservada',
+            reservedAt: '2026-11-24T20:30:00.000Z',
+            reservedFor: 'Ana Ruiz · 600123456'
+        })
+        expect(res.status).toHaveBeenCalledWith(200)
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status: 'reservada' }))
+        expect(next).not.toHaveBeenCalled()
+    })
+
+    it('should respond 200 with the occupied table', async () => {
+        await controller.occupy(reqFor({ tableId: 't1' }, { partySize: 4 }), res, next)
+
+        expect(service.occupy).toHaveBeenCalledWith('t1', 4)
+        expect(res.status).toHaveBeenCalledWith(200)
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status: 'ocupada' }))
+        expect(next).not.toHaveBeenCalled()
+    })
+
+    it('should convert minCapacity from the query and respond 200', async () => {
+        await controller.getAvailable(reqFor({}, {}, { minCapacity: '4' }), res, next)
+
+        expect(service.listAvailable).toHaveBeenCalledWith('rest-1', 4)
+        expect(res.status).toHaveBeenCalledWith(200)
+        expect(res.json).toHaveBeenCalledWith([expect.objectContaining({ id: 't1' })])
+        expect(next).not.toHaveBeenCalled()
+    })
+
+    it('should default minCapacity to 1 when missing', async () => {
+        await controller.getAvailable(reqFor(), res, next)
+
+        expect(service.listAvailable).toHaveBeenCalledWith('rest-1', 1)
+        expect(res.status).toHaveBeenCalledWith(200)
+    })
+
+    it('should delegate validation errors to next', async () => {
+        service.occupy.mockRejectedValueOnce(new TableNotAvailableError())
+
+        await controller.occupy(reqFor({ tableId: 't1' }, { partySize: 4 }), res, next)
+
+        expect(next).toHaveBeenCalledWith(expect.any(TableNotAvailableError))
         expect(res.status).not.toHaveBeenCalled()
         expect(res.json).not.toHaveBeenCalled()
     })

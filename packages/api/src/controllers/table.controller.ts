@@ -65,6 +65,38 @@ export class TableController {
         }
     }
 
+    changeStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const table = await this.tableService.changeStatus(req.params.tableId as string, {
+                status: req.body.status,
+                reservedAt: req.body.reservedAt ?? null,
+                reservedFor: req.body.reservedFor ?? null
+            })
+            res.status(200).json(this.toJSON(table))
+        } catch (error) {
+            next(error)
+        }
+    }
+
+    occupy = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const table = await this.tableService.occupy(req.params.tableId as string, req.body.partySize)
+            res.status(200).json(this.toJSON(table))
+        } catch (error) {
+            next(error)
+        }
+    }
+
+    getAvailable = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const minCapacity = Number(req.query.minCapacity ?? 1)
+            const tables = await this.tableService.listAvailable(req.params.restaurantId as string, minCapacity)
+            res.status(200).json(tables.map(t => this.toJSON(t)))
+        } catch (error) {
+            next(error)
+        }
+    }
+
     private toJSON(table: Table) {
         return {
             id: table.id,
