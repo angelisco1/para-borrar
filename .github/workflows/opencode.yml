@@ -24,7 +24,25 @@ jobs:
       id-token: write # intercambio OIDC por el token de la GitHub App de opencode
       contents: read # checkout del repositorio (también en repos privados)
       actions: read # leer resultados de CI de la PR
+      pull-requests: read # comprobar si la PR viene de un fork
     steps:
+      # En una PR, opencode trabaja sobre el código de la PR y carga su .opencode/ (permisos y
+      # agentes). Si la PR viene de un fork, ese código no es de confianza: podría abrirse todos
+      # los permisos y ejecutarse con los secretos y el token de la app. Se cortan antes del checkout.
+      # (issue_comment no incluye el repo de origen de la PR, por eso se consulta con la API.)
+      - name: Rechazar PRs de forks
+        if: github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head_repo="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name // ""')"
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::La PR #${PR_NUMBER} viene de un fork (${head_repo:-repositorio eliminado}); opencode no se ejecuta sobre código externo."
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:

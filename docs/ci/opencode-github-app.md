@@ -96,6 +96,8 @@ opencode-issues:
 
 > **Por qué es obligatorio:** los eventos `issue_comment` e `issues` se ejecutan en el repositorio base y **reciben los secretos aunque el comentario venga de alguien externo**, incluso en PRs de forks. Sin este filtro, cualquiera podría escribir `/oc ...` y hacer que opencode (con shell) ejecute comandos o intente sacar la `OPENCODE_API_KEY`. Si más personas tienen que poder usarlo, añade sus roles: `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`.
 
+**Tampoco se ejecuta sobre PRs de forks.** En una PR, opencode trabaja con el código de la PR y carga su `.opencode/` (permisos y agentes). Una PR de un fork podría abrirse todos los permisos y, en cuanto el propietario comentara `/oc`, ejecutarse con los secretos y el token de la app. El primer paso del job (**Rechazar PRs de forks**) consulta la PR con la API (el evento `issue_comment` no trae el repositorio de origen) y hace fallar el job si viene de un fork, antes del checkout. Necesita `pull-requests: read`.
+
 El resto de la configuración:
 
 - `permissions: id-token: write` (OIDC → token de la app) y `contents: read`. El resto de permisos los pone la app.
@@ -118,6 +120,7 @@ Con `opencode.yml` ya en `main`: con la cuenta propietaria, comenta en una issue
 | Error de autenticación del modelo (401) | `OPENCODE_API_KEY` inválida, caducada o mal copiada. | Paso 2. |
 | El job no avanza y el último log es `asking { permission: ... }` | opencode espera una aprobación de permisos que en CI nadie puede dar. | Cancelar el run, usar un agente que **deniegue** (no `ask`) lo que no necesita y revisar el prompt. El `timeout-minutes` lo corta solo. |
 | El job sale **skipped** al mencionar `/oc` | Quien comenta no es `OWNER`, o el texto no contiene `/opencode` ni `/oc`. | Comentar con la cuenta propietaria o ampliar la lista de roles. |
+| `La PR #N viene de un fork ...; opencode no se ejecuta sobre código externo.` | Se ha mencionado `/oc` en una PR de un fork. | Es intencionado. Para usar opencode con esos cambios, llévalos a una rama del propio repositorio. |
 | Al mencionar `/oc` se ejecuta otro workflow (o ninguno) | `opencode.yml` todavía no está en `main`: los eventos de comentarios e issues usan los workflows de la rama por defecto. | Hacer merge a `main`. |
 
 ## Mantenimiento
