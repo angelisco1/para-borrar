@@ -1,7 +1,6 @@
 ---
 description: Crea un commit siguiendo la especificación Conventional Commits
 argument-hint: [descripción opcional o pista del tipo/scope]
-allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git add:*), Bash(git commit:*)
 ---
 
 # Commit con Conventional Commits

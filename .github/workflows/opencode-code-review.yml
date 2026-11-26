@@ -1,0 +1,57 @@
+name: opencode code review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # Opcional: revisar solo ciertos ficheros
+    # paths:
+    #   - "packages/**/*.ts"
+    #   - "docs/**"
+
+jobs:
+  review:
+    # Opcional: filtrar por autor del PR
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
+    # Los PRs desde forks no reciben secretos ni token de escritura.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # En CI nadie puede aprobar permisos: si opencode se queda esperando, que no llegue a las 6 h por defecto.
+    timeout-minutes: 15
+    permissions:
+      id-token: write # intercambio OIDC por el token de la GitHub App de opencode
+      contents: read
+      pull-requests: write # publicar la revisión
+      issues: write # los comentarios de PR se gestionan con la API de issues
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # para poder hacer git diff contra la rama base
+          persist-credentials: false
+
+      - name: Run opencode code review
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4.1-flash-free
+          # Agente de solo lectura (.opencode/agents/ci-revisor.md): sin edición, sin shell salvo git
+          # de consulta y sin acceso fuera del repo. Con el agente por defecto (build) intentaba leer
+          # ~/.config/gh y se quedaba esperando una aprobación que nadie puede dar.
+          agent: ci-revisor
+          prompt: |
+            Revisa el pull request #${{ github.event.pull_request.number }} de este repositorio.
+            Obtén los cambios con `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD`.
+            Tu respuesta final se publicará automáticamente como comentario en la PR: no intentes
+            publicarla tú, ni usar `gh`, ni buscar tokens o credenciales. Céntrate en:
+            - Posibles bugs y casos límite no cubiertos.
+            - Coherencia con la arquitectura descrita en AGENTS.md y en `docs/`.
+            - Falta de tests para la lógica nueva o modificada.
+            - Problemas de seguridad (autenticación, autorización, datos expuestos).
+            - Cambios en la API que no actualicen `docs/api/*.openapi.yml`.
+
+            Sé concreto: cita fichero y línea. No comentes preferencias de estilo ni reescribas el
+            código salvo que se pida explícitamente; esta ejecución es solo de revisión.
