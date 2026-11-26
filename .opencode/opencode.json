@@ -24,7 +24,8 @@
   "permission": {
     "bash": {
       "*": "allow",
-      "git push *": "deny"
+      "git push*": "deny",
+      "git * push*": "deny"
     },
     "edit": {
       "*": "allow",
