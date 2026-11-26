@@ -19,7 +19,7 @@ Ninguna de las dos **bloquea el merge**. Las menciones `/oc` (`opencode.yml`) si
    - `CONSISTENTE` y ya había un aviso: lo marca como resuelto ✅.
    - `CONSISTENTE` sin aviso previo: no publica nada.
 
-> **¿Por qué no se usa la action `anomalyco/opencode/github`?** La action solo instala opencode **v1**, y v1 no tiene el subcomando `github` de v2. Además, v1 no entiende el formato de permisos V2 (`"permissions": [...]`). Este job no necesita la integración con GitHub de la action (el comentario lo publica el propio workflow), así que basta con instalar el binario y usar `opencode run`.
+> **¿Por qué no se usa la action `anomalyco/opencode/github`?** La action solo instala opencode **v1** (la integración con GitHub, `opencode github run`, solo existe en v1; v2 no tiene ese subcomando). Además, v1 no entiende el formato de permisos V2 (`"permissions": [...]`). Este job no necesita la integración con GitHub de la action (el comentario lo publica el propio workflow), así que basta con instalar el binario y usar `opencode run`.
 
 ## Requisitos
 
@@ -143,12 +143,12 @@ La salida estándar contiene solo la respuesta final. Los logs y las llamadas a 
 
 Usa las mismas piezas que la revisión de coherencia (pasos 1 a 3 y la instalación del paso 4). Cambian el prompt y la publicación:
 
-- **Disparador**: `pull_request` (`opened`, `synchronize`, `ready_for_review`, `reopened`), solo si la PR no viene de un fork.
+- **Disparador**: `pull_request` (`opened`, `synchronize`, `ready_for_review`, `reopened`), solo si la PR no es un borrador ni viene de un fork.
 - **`concurrency`** por número de PR con `cancel-in-progress`: si se sube otro commit, se cancela la revisión anterior.
-- **`timeout-minutes: 15`** y `permissions: contents: read, pull-requests: write`. No necesita `id-token: write` ni la GitHub App.
+- **`timeout-minutes: 20`** (en una PR mediana tarda unos 10 minutos) y `permissions: contents: read, pull-requests: write`. No necesita `id-token: write` ni la GitHub App.
 - **Prompt**: bugs y casos límite, arquitectura según `AGENTS.md` y `docs/`, tests que faltan, seguridad y endpoints sin actualizar en `docs/api/*.openapi.yml`. Pide responder solo con la revisión en Markdown, porque se publica tal cual.
-- **Ejecución**: igual que la de coherencia (`opencode run ... --agent ci-revisor --file pr.diff`), guardando la salida en `opencode-review.md`. Si sale vacía, el job falla.
-- **Comentario**: lleva el marcador `<!-- resttek-opencode-review -->` y, en cada commit nuevo, **se actualiza el mismo comentario** en lugar de crear otro. Aparece como `github-actions[bot]`.
+- **Ejecución**: igual que la de coherencia (`opencode run ... --agent ci-revisor --file pr.diff`), guardando la salida en `$RUNNER_TEMP/opencode-review.md` (fuera del repo, para que no aparezca en `git status`). Si sale vacía, el job falla.
+- **Comentario**: lleva el marcador `<!-- resttek-opencode-review -->` y, en cada commit nuevo, **se actualiza el mismo comentario** en lugar de crear otro. Aparece como `github-actions[bot]`. Al buscar el comentario anterior solo se tienen en cuenta los de `github-actions[bot]`: si alguien copia el marcador en un comentario suyo, se ignora (el bot no puede editar comentarios ajenos y el job fallaría con 403). La revisión de coherencia usa el mismo criterio.
 
 > En una PR grande, el agente puede agotar sus `steps: 30` leyendo ficheros. En ese caso opencode le obliga a dar la respuesta final, así que la revisión se publica igualmente. Si se queda corta, sube `steps` en `ci-revisor.md` (y el `timeout-minutes` si hace falta).
 

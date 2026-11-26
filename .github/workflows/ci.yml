@@ -179,7 +179,8 @@ jobs:
           first_line="$(head -n 1 "$REPORT_FILE" | tr -d '\r')"
           # Comentario previo de este mismo check (si lo hay), para actualizarlo en lugar de duplicarlo.
           comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | last | .id // empty")"
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${MARKER}\"))) | .id" \
+            | tail -n 1)"
 
           case "$first_line" in
             "RESULTADO: INCONSISTENTE")

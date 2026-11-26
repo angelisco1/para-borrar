@@ -23,17 +23,19 @@ jobs:
     #   github.event.pull_request.user.login == 'external-contributor' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
-    # Los PRs desde forks no reciben secretos.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Los PRs desde forks no reciben secretos, y los borradores no se revisan.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # En CI nadie puede aprobar permisos: si opencode se queda esperando, que no llegue a las 6 h por defecto.
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write # publicar/actualizar el comentario
     env:
       OPENCODE_VERSION: 2.4.2
-      REVIEW_FILE: opencode-review.md
+      REVIEW_FILE: opencode-review.md # se guarda en $RUNNER_TEMP, fuera del repo
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,8 +82,8 @@ jobs:
           set -euo pipefail
           git diff "origin/${BASE_REF}...HEAD" > "$RUNNER_TEMP/pr.diff"
           opencode run --standalone --archived --auto --agent ci-revisor --model "$MODEL" \
-            --file "$RUNNER_TEMP/pr.diff" "$PROMPT" > "$REVIEW_FILE"
-          if [ ! -s "$REVIEW_FILE" ]; then
+            --file "$RUNNER_TEMP/pr.diff" "$PROMPT" > "$RUNNER_TEMP/$REVIEW_FILE"
+          if [ ! -s "$RUNNER_TEMP/$REVIEW_FILE" ]; then
             echo "::error::opencode no ha devuelto ninguna revisión."
             exit 1
           fi
@@ -96,13 +98,14 @@ jobs:
           set -euo pipefail
           {
             echo "$MARKER"
-            cat "$REVIEW_FILE"
+            cat "$RUNNER_TEMP/$REVIEW_FILE"
             echo
             echo "<sub>Revisión de opencode · Commit revisado: \`${HEAD_SHA::7}\` · [Ver ejecución](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})</sub>"
           } > comment.md
 
           comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | last | .id // empty")"
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${MARKER}\"))) | .id" \
+            | tail -n 1)"
           if [ -n "$comment_id" ]; then
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -F body=@comment.md > /dev/null
           else

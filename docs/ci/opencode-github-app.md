@@ -100,7 +100,7 @@ opencode-issues:
 
 El resto de la configuración:
 
-- `permissions: id-token: write` (OIDC → token de la app) y `contents: read`. El resto de permisos los pone la app.
+- `permissions` del `GITHUB_TOKEN` del job: `id-token: write` (OIDC → token de la app), `contents: read` (checkout), `actions: read` (leer los resultados del CI de la PR) y `pull-requests: read` (comprobar si la PR viene de un fork). Comentar, crear ramas y abrir PRs lo hace la app con sus propios permisos.
 - `actions/checkout` con `persist-credentials: false`.
 - `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` en `env` y `model: opencode/deepseek-v4.1-flash-free`.
 - `timeout-minutes: 20`. Si opencode pide una aprobación de permisos (`asking ...` en el log), en CI nadie puede darla y el job se quedaría colgado hasta las 6 h por defecto.
