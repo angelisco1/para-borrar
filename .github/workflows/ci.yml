@@ -84,6 +84,7 @@ jobs:
   docs-consistency:
     name: Coherencia con la documentación (opencode)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Los secretos no están disponibles en PRs desde forks, y los borradores no se revisan.
     if: >-
       github.event.pull_request.draft == false &&

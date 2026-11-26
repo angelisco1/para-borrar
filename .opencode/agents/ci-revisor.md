@@ -4,6 +4,7 @@ mode: primary
 steps: 30
 permission:
   "*": deny
+  external_directory: deny
   read: allow
   glob: allow
   grep: allow
