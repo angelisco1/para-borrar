@@ -1,8 +1,15 @@
-# Revisión de coherencia con la documentación (opencode v2 en GitHub Actions)
+# Revisiones de PRs con opencode v2 en GitHub Actions
 
-Guía para configurar el job `docs-consistency` de [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). En cada PR, opencode compara los cambios con la documentación del proyecto (`AGENTS.md`, `README.md` y `docs/`) y, si encuentra incoherencias, las publica en un comentario de la PR. **No bloquea el merge.**
+Guía para configurar las dos revisiones automáticas de PRs que usan **opencode v2** (sin la action oficial ni la GitHub App):
 
-## Cómo funciona
+| Workflow / job | Qué hace |
+| --- | --- |
+| `docs-consistency` en [`ci.yml`](../../.github/workflows/ci.yml) | Compara los cambios con la documentación del proyecto (`AGENTS.md`, `README.md` y `docs/`) y, si encuentra incoherencias, publica un aviso en la PR. |
+| [`opencode-code-review.yml`](../../.github/workflows/opencode-code-review.yml) | Revisa la PR (bugs, arquitectura, tests, seguridad, OpenAPI) y publica la revisión como comentario. |
+
+Ninguna de las dos **bloquea el merge**. Las menciones `/oc` (`opencode.yml`) siguen en v1 con la GitHub App: ver [opencode-github-app.md](opencode-github-app.md).
+
+## Cómo funciona (revisión de coherencia)
 
 1. Al abrirse o actualizarse una PR (que no sea borrador ni venga de un fork), se descarga el binario de **opencode v2** desde las releases de GitHub.
 2. Se calcula el diff contra la rama base (`git diff origin/<base>...HEAD`) y se lanza `opencode run` con el agente de solo lectura `ci-revisor`, adjuntando el diff.
@@ -132,7 +139,20 @@ Flags de `opencode run`:
 
 La salida estándar contiene solo la respuesta final. Los logs y las llamadas a herramientas van a stderr.
 
-### 5. Probarlo
+### 5. Revisión de código de PRs (`opencode-code-review.yml`)
+
+Usa las mismas piezas que la revisión de coherencia (pasos 1 a 3 y la instalación del paso 4). Cambian el prompt y la publicación:
+
+- **Disparador**: `pull_request` (`opened`, `synchronize`, `ready_for_review`, `reopened`), solo si la PR no viene de un fork.
+- **`concurrency`** por número de PR con `cancel-in-progress`: si se sube otro commit, se cancela la revisión anterior.
+- **`timeout-minutes: 15`** y `permissions: contents: read, pull-requests: write`. No necesita `id-token: write` ni la GitHub App.
+- **Prompt**: bugs y casos límite, arquitectura según `AGENTS.md` y `docs/`, tests que faltan, seguridad y endpoints sin actualizar en `docs/api/*.openapi.yml`. Pide responder solo con la revisión en Markdown, porque se publica tal cual.
+- **Ejecución**: igual que la de coherencia (`opencode run ... --agent ci-revisor --file pr.diff`), guardando la salida en `opencode-review.md`. Si sale vacía, el job falla.
+- **Comentario**: lleva el marcador `<!-- resttek-opencode-review -->` y, en cada commit nuevo, **se actualiza el mismo comentario** en lugar de crear otro. Aparece como `github-actions[bot]`.
+
+> En una PR grande, el agente puede agotar sus `steps: 30` leyendo ficheros. En ese caso opencode le obliga a dar la respuesta final, así que la revisión se publica igualmente. Si se queda corta, sube `steps` en `ci-revisor.md` (y el `timeout-minutes` si hace falta).
+
+### 6. Probarlo
 
 **En local** (con opencode v2 instalado), desde la raíz del repo:
 
@@ -145,7 +165,7 @@ opencode run --standalone --archived --auto --agent ci-revisor \
 
 Ojo: en local se usa tu sesión de opencode y no `OPENCODE_API_KEY`.
 
-**En GitHub**: abre o actualiza una PR y comprueba que el job **Coherencia con la documentación (opencode)** termina en verde y, si hay incoherencias, que aparece el comentario en la PR.
+**En GitHub**: abre o actualiza una PR y comprueba que terminan en verde el job **Coherencia con la documentación (opencode)** (si hay incoherencias, aparece su aviso en la PR) y el workflow **opencode code review** (siempre publica o actualiza su comentario).
 
 ## Problemas frecuentes
 
@@ -160,5 +180,5 @@ Ojo: en local se usa tu sesión de opencode y no `OPENCODE_API_KEY`.
 ## Mantenimiento
 
 - **Renovar la key** antes de que caduque (pasos 1 y 2).
-- **Actualizar opencode**: cambiar `OPENCODE_VERSION` en `ci.yml` por una release `v2.x` publicada en <https://github.com/anomalyco/opencode/releases>.
+- **Actualizar opencode**: cambiar `OPENCODE_VERSION` en `ci.yml` y en `opencode-code-review.yml` por una release `v2.x` publicada en <https://github.com/anomalyco/opencode/releases>.
 - **Cambiar de modelo**: editar `MODEL`. Los modelos disponibles salen en `opencode models` o en <https://opencode.ai/zen/v1/models>.
