@@ -89,7 +89,6 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
-      id-token: write # OIDC de GitHub para iniciar sesión en OpenCode Console sin API key
       contents: read
       pull-requests: write # publicar/actualizar el comentario
     env:
@@ -110,41 +109,13 @@ jobs:
           echo "$RUNNER_TEMP/opencode" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/opencode/opencode" --version
 
-      # Intercambia el token OIDC de GitHub por un token de OpenCode Console y lo deja en
-      # OPENCODE_API_KEY para los pasos siguientes (enmascarado en los logs).
-      - name: Iniciar sesión en OpenCode
-        env:
-          AUDIENCE: https://opencode.ai/console
-        run: |
-          set -euo pipefail
-          oidc=$(curl -sSf --oauth2-bearer "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
-          # Sin -f para poder mostrar el motivo si OpenCode rechaza el intercambio.
-          response=$(curl -sS -w '\n%{http_code}' https://opencode.ai/console/auth/oauth/token \
-            -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
-            -d subject_token_type=urn:ietf:params:oauth:token-type:jwt \
-            -d client_id=sk_2a948a1d-2634-4137-8c5c-b8d82276154e \
-            -d subject_token="$oidc")
-          status=$(tail -n 1 <<< "$response")
-          body=$(sed '$d' <<< "$response")
-          token=$(jq -r '.access_token // empty' <<< "$body" 2>/dev/null || true)
-          if [ "$status" != "200" ] || [ -z "$token" ]; then
-            echo "::error::OpenCode Console ha rechazado el intercambio OIDC (HTTP $status)."
-            # La respuesta de error no incluye el token; se muestra para diagnosticar.
-            jq 'del(.access_token, .refresh_token)' <<< "$body" 2>/dev/null || echo "$body"
-            # Claims del token OIDC de GitHub (no es secreto) para comprobar el sujeto en la consola.
-            jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson | {sub, repository, ref, event_name, aud}' <<< "$oidc" 2>/dev/null || true
-            exit 1
-          fi
-          echo "::add-mask::$token"
-          echo "OPENCODE_API_KEY=$token" >> "$GITHUB_ENV"
-
       # El agente ci-revisor (.opencode/agents/ci-revisor.md) es de solo lectura: el informe
       # se toma de la salida estándar de `opencode run` y lo escribe este paso, no el modelo.
       # El prompt va en una variable de entorno (no interpolado en el script) porque incluye
       # el título de la PR, que es texto controlado por quien la abre.
       - name: Revisar coherencia con opencode
         env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           MODEL: opencode/deepseek-v4.1-flash-free
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           PROMPT: |
