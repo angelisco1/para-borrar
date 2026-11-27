@@ -25,6 +25,7 @@ jobs:
       contents: read # checkout del repositorio (también en repos privados)
       actions: read # leer resultados de CI de la PR
       pull-requests: read # comprobar si la PR viene de un fork
+      issues: write # gh del agente: comentar en issues/PRs (p. ej. la skill plan-feature)
     steps:
       # En una PR, opencode trabaja sobre el código de la PR y carga su .opencode/ (permisos y
       # agentes). Si la PR viene de un fork, ese código no es de confianza: podría abrirse todos
@@ -53,6 +54,14 @@ jobs:
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # gh autenticado para las skills que lo usan (plan-feature lee la issue y publica el plan).
+          GH_TOKEN: ${{ github.token }}
+          # Permisos solo para CI, por encima de .opencode/opencode.json: en CI nadie puede aprobar un
+          # "ask" (el job se queda colgado), así que lo de fuera del repo se deniega, igual que buscar
+          # credenciales con git o gh.
+          OPENCODE_CONFIG_CONTENT: >-
+            {"permission": {"external_directory": "deny",
+            "bash": {"git credential*": "deny", "git config --get*credential*": "deny", "gh auth token*": "deny"}}}
         with:
           model: opencode/deepseek-v4.1-flash-free
           mentions: /opencode,/oc
@@ -75,6 +84,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      issues: write # gh del agente: comentar en la issue
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -86,6 +96,14 @@ jobs:
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # gh autenticado para las skills que lo usan (plan-feature lee la issue y publica el plan).
+          GH_TOKEN: ${{ github.token }}
+          # Permisos solo para CI, por encima de .opencode/opencode.json: en CI nadie puede aprobar un
+          # "ask" (el job se queda colgado), así que lo de fuera del repo se deniega, igual que buscar
+          # credenciales con git o gh.
+          OPENCODE_CONFIG_CONTENT: >-
+            {"permission": {"external_directory": "deny",
+            "bash": {"git credential*": "deny", "git config --get*credential*": "deny", "gh auth token*": "deny"}}}
         with:
           model: opencode/deepseek-v4.1-flash-free
           prompt: |
