@@ -100,7 +100,24 @@ opencode-issues:
 
 El resto de la configuración:
 
-- `permissions` del `GITHUB_TOKEN` del job: `id-token: write` (OIDC → token de la app), `contents: read` (checkout), `actions: read` (leer los resultados del CI de la PR) y `pull-requests: read` (comprobar si la PR viene de un fork). Comentar, crear ramas y abrir PRs lo hace la app con sus propios permisos.
+- `permissions` del `GITHUB_TOKEN` del job: `id-token: write` (OIDC → token de la app), `contents: read` (checkout), `actions: read` (leer los resultados del CI de la PR), `pull-requests: read` (comprobar si la PR viene de un fork) e `issues: write` (para el `gh` del agente). La respuesta final, las ramas y las PRs las hace la app con sus propios permisos.
+- `GH_TOKEN: ${{ github.token }}`: el agente no recibe el token de la app, así que sin esto `gh` no está autenticado. Las skills que usan `gh` (p. ej. `plan-feature`, que publica el plan como comentario de la issue) lo necesitan. Lo que publique así aparece como `github-actions[bot]`.
+- `SLACK_BOT_TOKEN` y `SLACK_TEAM_ID` (secretos del repositorio): los lee el MCP de Slack de `.opencode/opencode.json` con `{env:...}`, y los usa `plan-feature` para avisar al canal. Para configurarlo:
+  1. En <https://api.slack.com/apps>, crea o elige la app y dale en **OAuth & Permissions** solo el scope `chat:write`.
+  2. Instálala en el workspace y copia el **Bot User OAuth Token** (`xoxb-...`).
+  3. Invita al bot al canal (`/invite @bot`); si no está en el canal, no puede publicar.
+  4. Copia el **Team ID** (`T...`), que aparece en *About this workspace* o en la URL.
+  5. Crea los secretos `SLACK_BOT_TOKEN` y `SLACK_TEAM_ID`.
+
+  Si no existen, el MCP de Slack no arranca y la skill solo avisa de que no ha podido publicar. El agente tiene shell, así que el token queda a su alcance: dale los mínimos permisos.
+- `OPENCODE_CONFIG_CONTENT`: permisos **solo para CI**, que se suman a `.opencode/opencode.json` con más prioridad (en local no cambia nada):
+
+  ```json
+  {"permission": {"external_directory": "deny",
+    "bash": {"git credential*": "deny", "git config --get*credential*": "deny", "gh auth token*": "deny"}}}
+  ```
+
+  `external_directory` vale `ask` por defecto: en cuanto el agente intenta leer algo fuera del repo (p. ej. `~/.config/gh`), se queda esperando una aprobación que nadie puede dar. Con `deny`, la herramienta falla y el agente sigue. Las reglas de `bash` impiden que vaya a buscar credenciales de git o gh si algo no le funciona.
 - `actions/checkout` con `persist-credentials: false`.
 - `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` en `env` y `model: opencode/deepseek-v4.1-flash-free`.
 - `timeout-minutes: 20`. Si opencode pide una aprobación de permisos (`asking ...` en el log), en CI nadie puede darla y el job se quedaría colgado hasta las 6 h por defecto.
@@ -118,7 +135,8 @@ Con `opencode.yml` ya en `main`: con la cuenta propietaria, comenta en una issue
 | `App token exchange failed: 404 ... not installed` | Falta la GitHub App en el repositorio. | Paso 1. |
 | `V2 permissions are not supported by OpenCode V1` | `opencode.json` o un agente usa `"permissions": [...]`. | Pasar a `"permission": {...}` (paso 3). |
 | Error de autenticación del modelo (401) | `OPENCODE_API_KEY` inválida, caducada o mal copiada. | Paso 2. |
-| El job no avanza y el último log es `asking { permission: ... }` | opencode espera una aprobación de permisos que en CI nadie puede dar. | Cancelar el run, usar un agente que **deniegue** (no `ask`) lo que no necesita y revisar el prompt. El `timeout-minutes` lo corta solo. |
+| El job no avanza y el último log es `asking { permission: ... }` | opencode espera una aprobación de permisos que en CI nadie puede dar. | Cancelar el run y añadir ese permiso como `deny` en `OPENCODE_CONFIG_CONTENT` (o en el agente). El `timeout-minutes` lo corta solo. |
+| Una skill dice que `gh` no está autenticado, o el agente intenta buscar tokens | Falta `GH_TOKEN` en el paso de opencode. | Añadir `GH_TOKEN: ${{ github.token }}` y el permiso que necesite (`issues: write`). |
 | El job sale **skipped** al mencionar `/oc` | Quien comenta no es `OWNER`, o el texto no contiene `/opencode` ni `/oc`. | Comentar con la cuenta propietaria o ampliar la lista de roles. |
 | `La PR #N viene de un fork ...; opencode no se ejecuta sobre código externo.` | Se ha mencionado `/oc` en una PR de un fork. | Es intencionado. Para usar opencode con esos cambios, llévalos a una rama del propio repositorio. |
 | Al mencionar `/oc` se ejecuta otro workflow (o ninguno) | `opencode.yml` todavía no está en `main`: los eventos de comentarios e issues usan los workflows de la rama por defecto. | Hacer merge a `main`. |
