@@ -102,6 +102,14 @@ El resto de la configuración:
 
 - `permissions` del `GITHUB_TOKEN` del job: `id-token: write` (OIDC → token de la app), `contents: read` (checkout), `actions: read` (leer los resultados del CI de la PR), `pull-requests: read` (comprobar si la PR viene de un fork) e `issues: write` (para el `gh` del agente). La respuesta final, las ramas y las PRs las hace la app con sus propios permisos.
 - `GH_TOKEN: ${{ github.token }}`: el agente no recibe el token de la app, así que sin esto `gh` no está autenticado. Las skills que usan `gh` (p. ej. `plan-feature`, que publica el plan como comentario de la issue) lo necesitan. Lo que publique así aparece como `github-actions[bot]`.
+- `SLACK_BOT_TOKEN` y `SLACK_TEAM_ID` (secretos del repositorio): los lee el MCP de Slack de `.opencode/opencode.json` con `{env:...}`, y los usa `plan-feature` para avisar al canal. Para configurarlo:
+  1. En <https://api.slack.com/apps>, crea o elige la app y dale en **OAuth & Permissions** solo el scope `chat:write`.
+  2. Instálala en el workspace y copia el **Bot User OAuth Token** (`xoxb-...`).
+  3. Invita al bot al canal (`/invite @bot`); si no está en el canal, no puede publicar.
+  4. Copia el **Team ID** (`T...`), que aparece en *About this workspace* o en la URL.
+  5. Crea los secretos `SLACK_BOT_TOKEN` y `SLACK_TEAM_ID`.
+
+  Si no existen, el MCP de Slack no arranca y la skill solo avisa de que no ha podido publicar. El agente tiene shell, así que el token queda a su alcance: dale los mínimos permisos.
 - `OPENCODE_CONFIG_CONTENT`: permisos **solo para CI**, que se suman a `.opencode/opencode.json` con más prioridad (en local no cambia nada):
 
   ```json

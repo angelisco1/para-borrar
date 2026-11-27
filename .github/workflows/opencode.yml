@@ -56,6 +56,9 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # gh autenticado para las skills que lo usan (plan-feature lee la issue y publica el plan).
           GH_TOKEN: ${{ github.token }}
+          # MCP de Slack (.opencode/opencode.json los lee con {env:...}); plan-feature avisa por Slack.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_TEAM_ID: ${{ secrets.SLACK_TEAM_ID }}
           # Permisos solo para CI, por encima de .opencode/opencode.json: en CI nadie puede aprobar un
           # "ask" (el job se queda colgado), así que lo de fuera del repo se deniega, igual que buscar
           # credenciales con git o gh.
@@ -98,6 +101,9 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # gh autenticado para las skills que lo usan (plan-feature lee la issue y publica el plan).
           GH_TOKEN: ${{ github.token }}
+          # MCP de Slack (.opencode/opencode.json los lee con {env:...}); plan-feature avisa por Slack.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_TEAM_ID: ${{ secrets.SLACK_TEAM_ID }}
           # Permisos solo para CI, por encima de .opencode/opencode.json: en CI nadie puede aprobar un
           # "ask" (el job se queda colgado), así que lo de fuera del repo se deniega, igual que buscar
           # credenciales con git o gh.
