@@ -1,17 +1,18 @@
-# opencode en GitHub: menciones y revisión de PRs (GitHub App)
+# opencode en GitHub: menciones con `/oc` (GitHub App, opencode v1)
 
-Guía para configurar los dos workflows que usan la action oficial `anomalyco/opencode/github`:
+Guía para configurar [`opencode.yml`](../../.github/workflows/opencode.yml), el único workflow que sigue usando la action oficial `anomalyco/opencode/github`, y por tanto **opencode v1**:
 
-| Workflow | Cuándo se ejecuta | Qué hace |
-| --- | --- | --- |
-| [`opencode-code-review.yml`](../../.github/workflows/opencode-code-review.yml) | Al abrir o actualizar una PR | Revisa la PR (bugs, arquitectura, tests, seguridad, OpenAPI) y publica la revisión como comentario. |
-| [`opencode.yml`](../../.github/workflows/opencode.yml) | Al escribir `/opencode` o `/oc` en un comentario de issue o PR, o en el título o cuerpo de una issue | Atiende lo que se le pide: responder, crear una rama o abrir una PR. |
+| Cuándo se ejecuta | Qué hace |
+| --- | --- |
+| Al escribir `/opencode` o `/oc` en un comentario de issue o PR, o en el título o cuerpo de una issue | Atiende lo que se le pide: responder, crear una rama o abrir una PR. |
 
-La revisión de coherencia con la documentación (job `docs-consistency` de `ci.yml`) funciona de otra forma (opencode v2 sin la action) y está documentada en [revision-coherencia-opencode.md](revision-coherencia-opencode.md).
+La revisión de coherencia (`ci.yml`) y la revisión de código de PRs (`opencode-code-review.yml`) usan **opencode v2** sin la action y sin la app. Están documentadas en [revision-coherencia-opencode.md](revision-coherencia-opencode.md).
+
+> **¿Por qué este sigue en v1?** opencode v2 no tiene integración con GitHub (no existe `opencode github run`). Para hacerlo con v2 habría que programar a mano la creación de ramas, commits, PRs y respuestas, y las PRs creadas con `GITHUB_TOKEN` no lanzarían el CI. Se mantendrá en v1 hasta que haya una action oficial para v2. Mientras tanto, `.opencode/` tiene que estar en formato de configuración **V1**.
 
 ## Las dos credenciales
 
-Estos workflows necesitan **dos credenciales distintas**:
+Este workflow necesita **dos credenciales distintas**:
 
 | Credencial | Para qué | Dónde se configura |
 | --- | --- | --- |
@@ -39,7 +40,7 @@ App token exchange failed: 404 Not Found - The OpenCode GitHub App is not instal
 
 ### 2. Crear la API key y guardarla como secreto
 
-Es la misma key que usa la revisión de coherencia. Si ya está creada, sáltate este paso.
+Es la misma key que usan las revisiones de `ci.yml` y `opencode-code-review.yml`. Si ya está creada, sáltate este paso.
 
 1. En <https://opencode.ai/console>, abre **Account › Personal API keys › Add API key**.
 2. Elige el workspace, un nombre y una caducidad. En **Permissions** elige **Custom**, con **Models › Request** y todo lo demás en **None**. Pulsa **Create** y copia la key (`oc_sk_...`).
@@ -67,53 +68,9 @@ La action instala **opencode v1**, así que la configuración tiene que estar en
 - Con `.github/**` opencode no puede modificar los workflows.
 - La action publica los cambios con su propio mecanismo (rama y PR), no con un `git push` del agente.
 
-**`.opencode/agents/ci-revisor.md`**, el agente de solo lectura que usa la revisión de PRs (ver [revision-coherencia-opencode.md](revision-coherencia-opencode.md#3-configurar-opencode-en-el-repositorio)). Deniega todo (`"*": deny`, incluido `external_directory`) salvo leer, buscar y `git diff`/`log`/`show`/`status`.
+Los agentes de `.opencode/agents/` (p. ej. `ci-revisor.md`) también los carga v1 al arrancar, así que también tienen que estar en formato V1.
 
-### 4. Workflow de revisión de PRs (`opencode-code-review.yml`)
-
-Puntos clave:
-
-```yaml
-on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-
-jobs:
-  review:
-    if: github.event.pull_request.head.repo.full_name == github.repository  # sin PRs de forks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      id-token: write       # OIDC -> token de la GitHub App
-      contents: read
-      pull-requests: write
-      issues: write         # los comentarios de PR van por la API de issues
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0    # para git diff contra la rama base
-          persist-credentials: false
-      - uses: anomalyco/opencode/github@latest
-        env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-        with:
-          model: opencode/deepseek-v4.1-flash-free
-          agent: ci-revisor
-          prompt: |
-            Revisa el pull request #${{ github.event.pull_request.number }} ...
-            Obtén los cambios con `git diff origin/<base>...HEAD`.
-            Tu respuesta final se publicará automáticamente como comentario en la PR: no intentes
-            publicarla tú, ni usar `gh`, ni buscar tokens o credenciales. ...
-```
-
-Por qué cada cosa:
-
-- **`agent: ci-revisor`**: sin él se usa `build`, que tiene shell libre. En la primera prueba, el modelo intentó publicar el comentario por su cuenta, buscó tokens y quiso leer `~/.config/gh/hosts.yml`. Como está fuera del repo, opencode pidió permiso (`asking ... external_directory`) y el job se quedó colgado esperando una aprobación que en CI nadie puede dar.
-- **El prompt aclara que la respuesta se publica sola**: la action publica la respuesta final como comentario. Si el prompt dice "publica la revisión", el modelo intenta hacerlo él.
-- **`timeout-minutes`**: si vuelve a quedarse esperando, el job se corta en 15 minutos en lugar de las 6 horas por defecto de GitHub.
-- **Filtro de forks**: las PRs de forks no reciben secretos.
-
-### 5. Workflow de menciones (`opencode.yml`)
+### 4. Workflow de menciones (`opencode.yml`)
 
 Tiene dos jobs:
 
@@ -139,12 +96,20 @@ opencode-issues:
 
 > **Por qué es obligatorio:** los eventos `issue_comment` e `issues` se ejecutan en el repositorio base y **reciben los secretos aunque el comentario venga de alguien externo**, incluso en PRs de forks. Sin este filtro, cualquiera podría escribir `/oc ...` y hacer que opencode (con shell) ejecute comandos o intente sacar la `OPENCODE_API_KEY`. Si más personas tienen que poder usarlo, añade sus roles: `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`.
 
-El resto de la configuración es igual que en la revisión: `id-token: write`, `persist-credentials: false`, `OPENCODE_API_KEY` en `env`, `model` y `timeout-minutes: 20`.
+**Tampoco se ejecuta sobre PRs de forks.** En una PR, opencode trabaja con el código de la PR y carga su `.opencode/` (permisos y agentes). Una PR de un fork podría abrirse todos los permisos y, en cuanto el propietario comentara `/oc`, ejecutarse con los secretos y el token de la app. El primer paso del job (**Rechazar PRs de forks**) consulta la PR con la API (el evento `issue_comment` no trae el repositorio de origen) y hace fallar el job si viene de un fork, antes del checkout. Necesita `pull-requests: read`.
 
-### 6. Probarlo
+El resto de la configuración:
 
-1. **Revisión de PRs**: abre una PR (o sube un commit a una abierta). En **Actions**, el workflow **opencode code review** debe terminar en verde en unos minutos y la PR debe tener un comentario de `opencode-agent[bot]`.
-2. **Menciones**: con la cuenta propietaria, comenta en una issue `/oc resume esta issue`. Se ejecuta el job `opencode` y responde en la issue. Si comenta otra cuenta, el job debe aparecer como **skipped**.
+- `permissions` del `GITHUB_TOKEN` del job: `id-token: write` (OIDC → token de la app), `contents: read` (checkout), `actions: read` (leer los resultados del CI de la PR) y `pull-requests: read` (comprobar si la PR viene de un fork). Comentar, crear ramas y abrir PRs lo hace la app con sus propios permisos.
+- `actions/checkout` con `persist-credentials: false`.
+- `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` en `env` y `model: opencode/deepseek-v4.1-flash-free`.
+- `timeout-minutes: 20`. Si opencode pide una aprobación de permisos (`asking ...` en el log), en CI nadie puede darla y el job se quedaría colgado hasta las 6 h por defecto.
+
+> **Importante:** los workflows de `issue_comment` e `issues` **siempre se ejecutan con la versión de la rama por defecto (`main`)**, nunca con la de una PR. Hasta que `opencode.yml` no esté en `main`, mencionar `/oc` no hace nada: lo recoge otro workflow o ninguno.
+
+### 5. Probarlo
+
+Con `opencode.yml` ya en `main`: con la cuenta propietaria, comenta en una issue `/oc resume esta issue`. Se ejecuta el job `opencode` y responde en la issue. Si comenta otra cuenta, el job debe aparecer como **skipped**.
 
 ## Problemas frecuentes
 
@@ -155,9 +120,11 @@ El resto de la configuración es igual que en la revisión: `id-token: write`, `
 | Error de autenticación del modelo (401) | `OPENCODE_API_KEY` inválida, caducada o mal copiada. | Paso 2. |
 | El job no avanza y el último log es `asking { permission: ... }` | opencode espera una aprobación de permisos que en CI nadie puede dar. | Cancelar el run, usar un agente que **deniegue** (no `ask`) lo que no necesita y revisar el prompt. El `timeout-minutes` lo corta solo. |
 | El job sale **skipped** al mencionar `/oc` | Quien comenta no es `OWNER`, o el texto no contiene `/opencode` ni `/oc`. | Comentar con la cuenta propietaria o ampliar la lista de roles. |
+| `La PR #N viene de un fork ...; opencode no se ejecuta sobre código externo.` | Se ha mencionado `/oc` en una PR de un fork. | Es intencionado. Para usar opencode con esos cambios, llévalos a una rama del propio repositorio. |
+| Al mencionar `/oc` se ejecuta otro workflow (o ninguno) | `opencode.yml` todavía no está en `main`: los eventos de comentarios e issues usan los workflows de la rama por defecto. | Hacer merge a `main`. |
 
 ## Mantenimiento
 
-- **Renovar la API key** antes de que caduque (paso 2). Sirve para los tres workflows.
+- **Renovar la API key** antes de que caduque (paso 2). Es la misma para los tres workflows.
 - **`@latest`**: la action se actualiza sola. Para evitar cambios inesperados, fíjala a un commit concreto (`anomalyco/opencode/github@<sha>`).
 - **Modelo**: cambia `model` en cada workflow. Los disponibles salen en <https://opencode.ai/zen/v1/models>.
